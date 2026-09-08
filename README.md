@@ -2,7 +2,7 @@
 
 `lsr/text-catalog` provides standalone NEON source-copy loading, source lookup, gettext compilation, and optional Nette/Symfony Console integration. Namespace: `Lsr\TextCatalog\`.
 
-The behavioral reference is [code-hunt-game ADR 0007](https://github.com/eSoul-cz/code-hunt-game/blob/master/docs/adr/0007-neon-source-copy-catalog-with-gettext.md), reviewed at `4aa85bce33f6846c0213f62574e779040cd01d23`. The reference application was not modified. See the [extraction record and release gates](docs/extraction-plan.md) and the independently versioned [JavaScript package](https://github.com/Heroyt/lsr-text-catalog-js).
+The independently versioned [JavaScript package](https://github.com/Heroyt/lsr-text-catalog-js) provides optional Vue/gettext helpers and Vite integration.
 
 ## Installation
 
@@ -39,7 +39,7 @@ $config = new CatalogConfig(
     languageDirectory: $root . '/languages',
     sourceRoot: $root,
     domain: 'example',
-    locales: ['en_US', 'cs_CZ'],
+    locales: ['en_US'], // bootstrap with the source locale; add target locales after preparing their PO files
     sourceLocale: 'en_US',
     frontendDirectory: $root . '/generated', // null for PHP-only consumers
     // potFile: $root . '/languages/example.pot', // this is the default
@@ -67,7 +67,9 @@ Keys combine the relative directory/file namespace with nested NEON keys. Direct
 
 `TextCatalogDefinition` exposes `texts`, `htmlKeys`, `plurals`, and `sourceFiles`. `TextCatalog` exposes source lookup and HTML membership; it never translates, interpolates, checks freshness, or compiles during lookup. It memoizes the selected definition. Compiled PHP caches are trusted executable build output. Compile during deployment, and restart/reset application-owned service lifetimes as needed when replacing a catalog.
 
-`CompilationResult` contains the definition and, when frontend generation is enabled, the generation digest and manifest path. Compilation maintains POT/PO catalogs and emits MO, PHP cache, and optional frontend artifacts. Translation contexts are semantic keys; plural contexts are the parent key. Existing translator content is merged rather than replaced with empty translations. Nonempty translations must preserve source placeholders.
+`CompilationResult` contains the definition and, when frontend generation is enabled, the generation digest and manifest path. Compilation maintains POT/PO catalogs and emits MO, PHP cache, and optional frontend artifacts. Translation contexts are semantic keys; plural contexts are the parent key. Existing translator content is merged rather than replaced with empty translations. Every configured locale must have complete, non-fuzzy active translations, including all required plural forms, and each translation must preserve the source placeholder set. The source locale is populated from canonical NEON copy.
+
+Bootstrap with only the source locale to generate the POT, then prepare complete translator-owned target PO files before adding their locales to `locales`. Missing or fuzzy translations, missing plural forms and placeholder mismatches fail compilation before any outputs are published; a failed compile does not publish a starter target PO.
 
 All content is validated and rendered before publication. Outputs are staged, the manifest is replaced last, and handled publication failures restore replaced outputs. Do not treat this as a distributed transaction across processes or machines; npm validates artifact digests and rejects an incomplete generation.
 
@@ -139,12 +141,20 @@ composer cs
 composer cs:fix # applies formatting; composer cbf is the conventional alias
 ```
 
-PHP CS Fixer replaces the sibling packages' coding-standard tooling here. [.php-cs-fixer.php](.php-cs-fixer.php) uses the reference application's exact rules and risky-fix policy, with only Finder paths adapted to this package (`src`, `tests`, and the configuration itself). PHPStan runs at level 8. Tests use synthetic catalogs, translations, directories and containers, not application copy.
+Coding standards are defined in [.php-cs-fixer.php](.php-cs-fixer.php), covering `src`, `tests`, and the configuration itself. PHPStan runs at level 8. Tests use synthetic catalogs, translations, directories and containers.
 
-The [extraction record](docs/extraction-plan.md) records package and external-consumer evidence, tested dependency versions and remaining release gates.
+## Agent skill
+
+Use the [lsr-text-catalog skill](https://github.com/Heroyt/lsr-skills/tree/master/skills/lsr-text-catalog) for source-copy ownership, compiler/build integration, translation adapters and the optional Vue/Vite companion.
+
+```sh
+npx skills add Heroyt/lsr-skills --skill lsr-text-catalog
+```
+
+The skill is guidance, not a runtime dependency; installing it does not install or publish either package.
 
 ## License and maintenance
 
 [MIT](LICENSE), copyright (c) 2026 Tomáš Vojík. Source and issue tracking: [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog). Composer manifest versions match their Git release tags; they are independent of npm versions and artifact format versions.
 
-Packagist registration and the LSR Satis repository are separate distribution channels. The workspace Satis configuration includes this repository, but changing that configuration does not build/upload Satis metadata or submit a package to Packagist. Maintainer release authorization and the current publication state are recorded in the [release gates](docs/extraction-plan.md).
+Packagist registration and distribution through the LSR Satis repository are separate release operations. Creating a Git tag does not publish metadata to either channel.
