@@ -2,7 +2,7 @@
   "name": "lsr/text-catalog",
   "description": "Unpublished skeleton for a future standalone NEON text catalog and gettext compiler.",
   "type": "library",
-  "license": "proprietary",
+  "license": "MIT",
   "homepage": "https://github.com/Heroyt/lsr-text-catalog",
   "support": {
     "source": "https://github.com/Heroyt/lsr-text-catalog"
