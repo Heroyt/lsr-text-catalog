@@ -1,35 +1,138 @@
-# LSR Text Catalog — PHP skeleton
+# LSR Text Catalog
 
-**Preparation only: no implementation has been extracted.** `lsr/text-catalog` is a candidate Composer name, not a confirmed registry identity or released package. This directory contains only a manifest, ignore rules, empty `src/` and `tests/` locations, and preparation documentation. There are no available classes, helper functions, commands, DI extensions, generated catalogs, or runnable tests. PSR-4 reserves `Lsr\TextCatalog\` and development namespace `Tests\`; it does not make future interfaces available today.
+`lsr/text-catalog` provides standalone NEON source-copy loading, source lookup, gettext compilation, and optional Nette/Symfony Console integration. Namespace: `Lsr\TextCatalog\`. The implementation is extracted and locally verified; it is **not released or published**.
 
-The read-only reference is [eSoul-cz/code-hunt-game](https://github.com/eSoul-cz/code-hunt-game), especially its [NEON source-copy catalog ADR](https://github.com/eSoul-cz/code-hunt-game/blob/master/docs/adr/0007-neon-source-copy-catalog-with-gettext.md). That ADR remains the behavior specification. See the shared [extraction plan](docs/extraction-plan.md) for sequencing, ownership, compatibility, and release gates; the independent JavaScript sibling is [lsr-text-catalog-js](https://github.com/Heroyt/lsr-text-catalog-js).
+The behavioral reference is [code-hunt-game ADR 0007](https://github.com/eSoul-cz/code-hunt-game/blob/master/docs/adr/0007-neon-source-copy-catalog-with-gettext.md), reviewed at `4aa85bce33f6846c0213f62574e779040cd01d23`. The reference application was not modified. See the [extraction record and release gates](docs/extraction-plan.md) and the independently versioned [JavaScript package](https://github.com/Heroyt/lsr-text-catalog-js).
 
-## Intended boundary — not available yet
+## Requirements
 
-- **Source definition and loading:** the reference `src/Core/TextCatalogDefinition.php` holds source strings, HTML membership, plural pairs, and source-file references. `TextCatalogLoader.php` recursively reads NEON, derives semantic keys, and validates source structure, placeholders, and permitted HTML. Preserve this source contract rather than inventing a second catalog format.
-- **Runtime source lookup and cache:** `src/Core/TextCatalog.php` performs source lookup, not translation or interpolation. It memoizes the definition, optionally loads an existing compiled PHP map, and otherwise loads NEON. It does not compile, scan for freshness, or update translation files during lookup. Production compilation remains a deployment responsibility; generated PHP is trusted executable output, not user-provided catalog input.
-- **Compilation:** `src/Core/TextCatalogCompiler.php` validates sources/translations, maintains POT/PO catalogs, and emits MO, a PHP source cache, runtime/compiled TypeScript artifacts, and the JSON build snapshot consumed by the frontend tooling. Source strings, HTML membership, and plural pairs cross that PHP/JavaScript boundary. Output paths, locale list, source locale, domain, and source-reference root must become explicit host inputs; the reference compiler still reads the application `ROOT` constant for source references.
-- **Standalone versus LSR:** plan a framework-independent loader/lookup/compiler core, with optional LSR DI and console integration rather than a mandatory `lsr/core` dependency. The reference `config/di/configs/texts.neon` supplies application paths and domain. `src/Console/Commands/CompileTextCatalogCommand.php` currently gets locales from `Lsr\Core\Translations`, reads `TEXT_CATALOG_DIR`, and uses app-owned localized command copy. Those are integration responsibilities, not standalone defaults. No command, standalone CLI entrypoint, service registration, or integration adapter is provided here.
-- **PHP translation and safe rendering:** `include/functions.php` owns global lookup/translation helpers, application constants, native gettext calls, and interpolation. Its `langHtmlText()` checks HTML membership and invokes `src/Core/ProductCopyHtmlSanitizer.php` **after translation and interpolation**. Keep sanitizer policy and locale/gettext configuration in the application adapter. Source HTML validation is not a replacement for final-output sanitization; escaped rendering remains the default. No global helper autoloading is configured in this skeleton.
+- PHP `>=8.5`, `ext-dom`, `ext-libxml`, `nette/neon ^3.4`, and `gettext/gettext ^5.7`.
+- No mandatory LSR framework, container, native gettext, Node, Vue, Redis, or application bootstrap dependency.
+- Optional DI: install `nette/di ^3.2`.
+- Optional command: install `symfony/console ^7.4 || ^8.0`; `lsr/console ^0.2` can discover the registered service.
+- Optional native translation adapter: enable `ext-gettext`; the application configures locale, domain binding and encoding.
 
-## Dependency preparation
+For local development, use a Composer `path` repository with `options.symlink: true` and an explicit development version constraint. Nothing in this repository installs the package into an application or publishes it to Satis.
 
-The current manifest requires **only PHP `>=8.5`**, matching the reference application's `composer.json`. This is a conservative preparation floor, not proof that extraction cannot support an older PHP version. There is no runtime source to justify installing libraries or extensions today; no tooling scripts, dev dependencies, lockfile, or test configuration are advertised.
+## Standalone compilation
 
-The following are intended future requirements, not installed or verified package constraints. Ranges copied below are evidence from the reference application's `composer.json`, **not a compatibility promise for this package**. Revisit direct requirements when the corresponding code is actually introduced.
+```php
+use Lsr\TextCatalog\CatalogConfig;
+use Lsr\TextCatalog\TextCatalog;
+use Lsr\TextCatalog\TextCatalogCompiler;
+use Lsr\TextCatalog\TextCatalogLoader;
 
-| Future responsibility | Dependency classification and evidence |
-| --- | --- |
-| NEON loader | Direct runtime `nette/neon` (reference `^3.4`): `TextCatalogLoader::load()` calls `Neon::decodeFile()`. |
-| Source HTML validation | Direct runtime `ext-dom` and `ext-libxml` if the loader is retained: it constructs `DOMDocument` and calls `libxml_*`. The application does not explicitly declare these two extensions; extraction must not rely on their transitive presence. Extension constraints remain unverified. |
-| POT/PO/MO compilation | Direct compiler/runtime `gettext/gettext` (reference `^5.7`): `TextCatalogCompiler.php` imports its translations, PO loader, and PO/MO generators. This is not merely a development tool if compilation ships as a supported package capability. |
-| Optional LSR wiring | Optional integration requirements: `lsr/core` (reference `^0.4`) for `Lsr\Core\Translations`; `lsr/console` (reference `^0.2.0`) for LSR command discovery; `nette/di` for any eventual DI extension. The command imports `symfony/console` directly, so a shipped console adapter must declare it directly rather than rely on LSR transitively. No package-local ranges for Symfony Console or Nette DI have been established. None belongs in the standalone core merely because the source app uses it. |
-| Application translation adapter | Application-owned `ext-gettext` (reference `*`), required by `include/functions.php` calls to `dgettext()`/`dngettext()`, not by source lookup or the pure-PHP gettext compiler alone. |
-| Application HTML adapter | Application-owned `symfony/html-sanitizer` (reference `^8.1`), imported by `ProductCopyHtmlSanitizer.php`; do not force its policy or dependency on plain-text catalog consumers. |
-| Future development tooling | Dev-only candidates from the reference: `phpunit/phpunit` `^13`, `phpstan/phpstan` `^2.0`, and `friendsofphp/php-cs-fixer` `^3.95`. Select and configure tooling only when implementation/tests exist; these ranges have not been checked for this package. |
+$root = __DIR__;
+$config = new CatalogConfig(
+    sourceDirectory: $root . '/copy',
+    cacheFile: $root . '/var/catalog.php',
+    languageDirectory: $root . '/languages',
+    sourceRoot: $root,
+    domain: 'example',
+    locales: ['en_US', 'cs_CZ'],
+    sourceLocale: 'en_US',
+    frontendDirectory: $root . '/generated', // null for PHP-only consumers
+    // potFile: $root . '/languages/example.pot', // this is the default
+);
+$loader = new TextCatalogLoader($config->sourceDirectory);
+$result = new TextCatalogCompiler($loader, $config)->compile();
 
-The compiler's generated TypeScript references `vue3-gettext`; that belongs to the frontend consumer/JavaScript package contract, not Composer. Neither package should acquire an implicit dependency on the application's full dependency graph.
+$catalog = new TextCatalog($loader, $config->cacheFile, useCompiledCache: true);
+echo $catalog->text('example.title');
+```
 
-## Licensing and release status
+A source file such as `copy/example.neon`:
 
-Licensed under the [MIT License](LICENSE), copyright (c) 2026 Tomáš Vojík. MIT licensing is approved for this package; it does not change the read-only reference application's license or authorize extraction or publication. The candidate package name and registry ownership still need confirmation. The user initialized this Git repository with origin [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog); the manifest records that identity. No release version, Satis registration, or publishing workflow has been created.
+```neon
+example:
+    title: 'Welcome %{name}'
+    count:
+        one: '%{count} item'
+        plural: '%{count} items'
+    rich:
+        html: '<strong>%{name}</strong>'
+```
+
+Keys combine the relative directory/file namespace with nested NEON keys. Directory names and file basenames use camelCase; each file contains exactly one root matching its basename (`example.neon` → `example`). Source text is nonempty and validated; rich text requires an explicit `html` leaf, and plural groups use sibling `one`/`plural` leaves with matching placeholders. `html`, `one`, and `plural` are structural names, not ordinary nested key segments.
+
+`TextCatalogDefinition` exposes `texts`, `htmlKeys`, `plurals`, and `sourceFiles`. `TextCatalog` exposes source lookup and HTML membership; it never translates, interpolates, checks freshness, or compiles during lookup. It memoizes the selected definition. Compiled PHP caches are trusted executable build output. Compile during deployment, and restart/reset application-owned service lifetimes as needed when replacing a catalog.
+
+`CompilationResult` contains the definition and, when frontend generation is enabled, the generation digest and manifest path. Compilation maintains POT/PO catalogs and emits MO, PHP cache, and optional frontend artifacts. Translation contexts are semantic keys; plural contexts are the parent key. Existing translator content is merged rather than replaced with empty translations. Nonempty translations must preserve source placeholders.
+
+All content is validated and rendered before publication. Outputs are staged, the manifest is replaced last, and handled publication failures restore replaced outputs. Do not treat this as a distributed transaction across processes or machines; npm validates artifact digests and rejects an incomplete generation.
+
+## Frontend artifact contract
+
+With `frontendDirectory` enabled, compilation emits:
+
+- `catalog.ts`: source lookup map, `TextKey`, `HtmlTextKey`, HTML membership, locale configuration and contextual translations.
+- `catalog.compiled.ts`: authoring key types, a declaration-only `text` macro, locale configuration and translations, without a runtime source lookup map.
+- `catalog.build.json`: format version **1**, configuration identity, source/HTML/plural snapshot, SHA-256 artifact digests and a deterministic generation digest.
+
+Generated types import `@lsr/text-catalog/types`; generated files belong to the consumer. They are ordinary TypeScript files visible to `tsc`/`vue-tsc` before Vite runs. Declaration-only compiled macros require the compiled Vite transform; they are not callable JavaScript fallbacks.
+
+Generation hashing uses recursively key-sorted JSON with compact separators and unescaped Unicode, slashes and line terminators, excluding `generation` itself. Artifact digests cover exact bytes. The npm reader accepts format 1 and rejects missing/unknown versions, mismatched configuration, malformed references, tampering and mixed generations. Package versions remain independent of the artifact format.
+
+## Optional DI and console integration
+
+```neon
+extensions:
+    textCatalog: Lsr\TextCatalog\Di\TextCatalogExtension
+
+textCatalog:
+    sourceDirectory: %appDir%/copy
+    cacheFile: %appDir%/var/catalog.php
+    languageDirectory: %appDir%/languages
+    sourceRoot: %appDir%
+    domain: example
+    locales: [en_US, cs_CZ]
+    sourceLocale: en_US
+    frontendDirectory: %appDir%/generated
+    useCompiledCache: true
+    command: true
+```
+
+The extension registers the same config, loader, lookup and compiler services. `command: true` adds `Lsr\TextCatalog\Console\CompileTextCatalogCommand`, named **`texts:cache:compile`**. Register it with Symfony Console directly or let `lsr/console` discover it in the consumer container. The consumer owns its actual `bin/console`; the package does not bootstrap an application. Command descriptions and diagnostics require no catalog keys. Compilation errors produce a failure exit status.
+
+## Native translation and HTML
+
+`Lsr\TextCatalog\Translation\TextTranslator` is an injected adapter, not a global helper autoload:
+
+```php
+$translator = new Lsr\TextCatalog\Translation\TextTranslator(
+    $catalog,
+    domain: 'example',
+    sanitizeHtml: $applicationSanitizer,
+);
+
+$label = $translator->langText('example.title', format: ['name' => 'Ada']);
+$count = $translator->langText(
+    'example.count.one', 'example.count.plural', 3, ['count' => 3],
+);
+$html = $translator->langHtmlText('example.rich', ['name' => $untrustedName]);
+```
+
+Configure native gettext (`setlocale`, environment where required, `bindtextdomain`, encoding) in application bootstrap. Named `%{name}` interpolation and numeric `sprintf` arguments are supported; mixed numeric/named argument sets are rejected. Plain strings remain unescaped data: use the consumer's normal escaped rendering.
+
+HTML eligibility is checked, translation/interpolation runs, and **then** the application sanitizer processes the final output. Missing sanitizer rejects HTML calls. Source HTML validation is not a replacement for output sanitization. The package supplies no no-op sanitizer or application-specific policy. Native gettext locale/domain state is process-global: long-running applications must serialize/reset it appropriately; constructing this adapter does not isolate concurrent native locale changes.
+
+Verify native locale reset on the deployment platform. On the macOS verification host, changing `setlocale` and environment variables alone retained a cached translation; explicitly changing the default `textdomain` invalidated that native cache in the sequential-request smoke check. This is application/process setup, not a portable per-request isolation guarantee supplied by the adapter. Use isolated workers when native global state cannot be reset safely.
+
+## Development and verification
+
+```sh
+composer install
+composer validate --strict --no-check-publish
+composer phpstan
+composer test
+composer cs
+composer cs:fix # applies formatting; composer cbf is the conventional alias
+```
+
+PHP CS Fixer replaces the sibling packages' coding-standard tooling here. [.php-cs-fixer.php](.php-cs-fixer.php) uses the reference application's exact rules and risky-fix policy, with only Finder paths adapted to this package (`src`, `tests`, and the configuration itself). PHPStan runs at level 8. Tests use synthetic catalogs, translations, directories and containers, not application copy.
+
+The [extraction record](docs/extraction-plan.md) records package and external-consumer evidence, tested dependency versions and remaining release gates.
+
+## License and publication
+
+[MIT](LICENSE), copyright (c) 2026 Tomáš Vojík. Extraction and package licensing were authorized; the reference application's license remains unchanged. Origin: [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog). Registry ownership, release versions, tags, push and Satis publication require a separately authorized release. No application migration is included.
