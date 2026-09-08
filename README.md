@@ -12,7 +12,7 @@ Install with Composer from [Packagist](https://packagist.org/packages/lsr/text-c
 composer require lsr/text-catalog
 ```
 
-The standard Packagist installation needs no custom Composer repository. To use the optional Vue/Vite integration, install the independently versioned [`@lsr/text-catalog`](https://www.npmjs.com/package/@lsr/text-catalog) npm package as well.
+The standard Packagist installation needs no custom Composer repository. To use the optional Vue/Vite integration, install the independently versioned [`lsr-text-catalog`](https://www.npmjs.com/package/lsr-text-catalog) npm package as well.
 
 ## Requirements
 
@@ -81,7 +81,7 @@ With `frontendDirectory` enabled, compilation emits:
 - `catalog.compiled.ts`: authoring key types, a declaration-only `text` macro, locale configuration and translations, without a runtime source lookup map.
 - `catalog.build.json`: format version **1**, configuration identity, source/HTML/plural snapshot, SHA-256 artifact digests and a deterministic generation digest.
 
-Generated types import `@lsr/text-catalog/types`; generated files belong to the consumer. They are ordinary TypeScript files visible to `tsc`/`vue-tsc` before Vite runs. Declaration-only compiled macros require the compiled Vite transform; they are not callable JavaScript fallbacks.
+Generated types import `lsr-text-catalog/types`; generated files belong to the consumer. They are ordinary TypeScript files visible to `tsc`/`vue-tsc` before Vite runs. Declaration-only compiled macros require the compiled Vite transform; they are not callable JavaScript fallbacks. Regenerate frontend artifacts when upgrading the compiler or npm package rather than hand-editing generated import paths.
 
 Generation hashing uses recursively key-sorted JSON with compact separators and unescaped Unicode, slashes and line terminators, excluding `generation` itself. Artifact digests cover exact bytes. The npm reader accepts format 1 and rejects missing/unknown versions, mismatched configuration, malformed references, tampering and mixed generations. Package versions remain independent of the artifact format.
 
