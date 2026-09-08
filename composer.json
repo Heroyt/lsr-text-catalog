@@ -7,6 +7,22 @@
   "support": {
     "source": "https://github.com/Heroyt/lsr-text-catalog"
   },
+  "archive": {
+    "exclude": [
+      "/vendor",
+      "/composer.lock",
+      "/temp",
+      "/build",
+      "/.phpunit.cache",
+      "/.phpunit.result.cache",
+      "/.php-cs-fixer.cache",
+      "/.idea",
+      "/.vscode",
+      "/.env*",
+      "/**/.DS_Store",
+      "/.DS_Store"
+    ]
+  },
   "require": {
     "php": ">=8.5",
     "ext-dom": "*",
@@ -22,6 +38,7 @@
     "symfony/console": "^7.4 || ^8.0"
   },
   "suggest": {
+    "ext-gettext": "Required by the optional native TextTranslator adapter.",
     "nette/di": "^3.2 for the optional TextCatalogExtension.",
     "symfony/console": "^7.4 || ^8.0 for the optional catalog compilation command.",
     "lsr/console": "^0.2 for command discovery in LSR applications."
