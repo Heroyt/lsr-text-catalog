@@ -145,6 +145,6 @@ The [extraction record](docs/extraction-plan.md) records package and external-co
 
 ## License and maintenance
 
-[MIT](LICENSE), copyright (c) 2026 Tomáš Vojík. Source and issue tracking: [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog). Composer release versions are derived from Git tags; they are independent of npm versions and artifact format versions.
+[MIT](LICENSE), copyright (c) 2026 Tomáš Vojík. Source and issue tracking: [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog). Composer manifest versions match their Git release tags; they are independent of npm versions and artifact format versions.
 
 Packagist registration and the LSR Satis repository are separate distribution channels. The workspace Satis configuration includes this repository, but changing that configuration does not build/upload Satis metadata or submit a package to Packagist. Maintainer release authorization and the current publication state are recorded in the [release gates](docs/extraction-plan.md).
