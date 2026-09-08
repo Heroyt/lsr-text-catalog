@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: ctype, dom, gettext, iconv, libxml, mbstring, tokenizer, xml, xmlwriter
+          coverage: none
+          tools: composer:v2
+      - name: Generate test locale
+        run: sudo locale-gen cs_CZ.UTF-8
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: CS
+        run: composer cs
+      - name: PHPStan
+        run: composer phpstan -- --no-progress
+      - name: PHPUnit
+        run: composer test -- --no-coverage --fail-on-skipped
