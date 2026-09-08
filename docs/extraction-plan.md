@@ -1,13 +1,13 @@
 # Text catalog extraction record and release gates
 
-Status on **2026-09-08**: implementation extracted into both independent packages, committed incrementally, and verified through local links and installed archives. **No release, tag, push, registry publication or application migration has occurred.** Registry ownership and release authorization remain separate gates.
+Status on **2026-09-08**: implementation extracted into both independent packages, committed incrementally, and verified through local links and installed archives. Public-distribution preparation adds the PHP repository to the workspace Satis configuration and prepares npm metadata for public access. **No release tag, push, registry publication, Satis build/upload or application migration has occurred.** Consumer READMEs describe the intended public Packagist/npm installation contract, not evidence of completed registry registration.
 
 ## Scope and authority
 
 - PHP: [`lsr/text-catalog`](../README.md), namespace `Lsr\TextCatalog\`, origin [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog).
 - npm: [`@lsr/text-catalog`](https://github.com/Heroyt/lsr-text-catalog-js), origin [Heroyt/lsr-text-catalog-js](https://github.com/Heroyt/lsr-text-catalog-js).
-- These are independent Git repositories and versioned packages, not a shared release train. npm remains private at `0.0.0`; Composer has no declared release version. Configured GitHub origins do not establish registry ownership.
-- The user authorized extraction, incremental commits, public dependency downloads, and MIT licensing for both packages. Copyright: 2026 Tomáš Vojík. The reference application's license remains unchanged.
+- These are independent Git repositories and versioned packages, not a shared release train. npm `0.1.0` is prepared for public publication on npmjs.org; the private flag is removed. Composer release versions remain derived from Git tags. Configured GitHub origins do not establish registry ownership.
+- The user authorized extraction, incremental commits, public dependency downloads, MIT licensing, Satis configuration and npm publication preparation, and public-facing installation documentation. Publication itself is explicitly excluded. Copyright: 2026 Tomáš Vojík. The reference application's license remains unchanged.
 - Read-only reference: `/Users/heroyt/Projects/code-hunt-game`, revision **`4aa85bce33f6846c0213f62574e779040cd01d23`**, default branch `master`.
 - [ADR 0007](https://github.com/eSoul-cz/code-hunt-game/blob/master/docs/adr/0007-neon-source-copy-catalog-with-gettext.md) remains the behavioral specification. This record describes package extraction, not a second authoring format.
 - Application copy, editable translations, locale/domain choices, HTML policy, bootstrap/Inertia wiring and deployment remain consumer-owned. Only synthetic copy was used in package tests and disposable consumers. No application source, lockfile or dependency constraint was migrated.
@@ -75,7 +75,7 @@ Optional additive fields may remain format 1 only when old readers can safely ig
 4. **Disposable local dependency consumer — verified.** Composer symlinked `path` packages and pnpm `link:` consumed the working trees outside the reference app. The consumer owned a synthetic catalog, English/Czech translations, sanitizer, Vue/SSR bootstrap and CLI.
 5. **Optional LSR integration — verified.** Real Nette container compilation and `lsr/console` discovery listed/executed `texts:cache:compile`; invalid translations returned status 1 without overwriting the good manifest.
 6. **Installed archive consumer — verified.** Fresh external consumer used a Composer ZIP and npm tarball, with no package path/link dependency. A local development-snapshot package repository supplied Composer metadata plus the archive URL; this was not a release version. Optional `lsr/console 0.2.0` was also consumed as a ZIP of its existing committed source.
-7. **Publication — gated, not performed.** Requires separate authorization, registry/scope verification, release versions and fresh release verification. Keep npm private until then. Follow Gitmoji release and Satis skills; no push, tag, Satis upload or npm publication is included here.
+7. **Public distribution prepared; publication gated.** The workspace `satis.json` includes the `lsr/text-catalog` VCS repository without running a build or upload. npm metadata targets public npmjs.org access and prepares version `0.1.0`; the tarball includes TypeScript source files for its source maps. Packagist registration is separate from Satis configuration. Registry/scope verification, release authorization and published-package verification remain required. No push, tag, Satis upload or npm publication is included here.
 8. **Application migration — gated, not performed.** Select each app and version independently in a later authorized task. Replace implementations and all callers cleanly while retaining app copy/configuration; test published packages and remove temporary links. Do not infer compatibility or upgrade LaserArenaControl/LaserLiga from this extraction.
 
 ## Verification record
@@ -114,6 +114,6 @@ Installed frontend dependencies: Vue/compiler packages **3.5.42**, vue3-gettext 
 
 ## Remaining authorized-release gate
 
-Before publishing either package, confirm registry identity/credentials, choose independent release versions, rebuild archives from the selected committed revisions, rerun affected package/consumer checks, and review the platform observations above. Publish only the explicitly authorized package(s). Install the published versions in an external consumer and repeat the gate, then consider separately authorized app migrations. Neither app's current framework constraints should be tightened or advanced merely to match the reference application.
+Before publishing either package, confirm registry identity/credentials, select the PHP release tag and confirm the prepared npm version, rebuild archives from the selected committed revisions, rerun affected package/consumer checks, and review the platform observations above. Register the PHP repository on Packagist separately from any authorized Satis build/upload. Publish only the explicitly authorized package(s). Install the published versions in an external consumer and repeat the gate, then consider separately authorized app migrations. Neither app's current framework constraints should be tightened or advanced merely to match the reference application.
 
 The original preparation checks on 2026-09-08 only validated skeleton metadata and a dry-run npm file list. The implementation, archive, CLI, browser, SSR and lifecycle evidence above supersedes those preparation-only checks.

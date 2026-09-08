@@ -1,8 +1,18 @@
 # LSR Text Catalog
 
-`lsr/text-catalog` provides standalone NEON source-copy loading, source lookup, gettext compilation, and optional Nette/Symfony Console integration. Namespace: `Lsr\TextCatalog\`. The implementation is extracted and locally verified; it is **not released or published**.
+`lsr/text-catalog` provides standalone NEON source-copy loading, source lookup, gettext compilation, and optional Nette/Symfony Console integration. Namespace: `Lsr\TextCatalog\`.
 
 The behavioral reference is [code-hunt-game ADR 0007](https://github.com/eSoul-cz/code-hunt-game/blob/master/docs/adr/0007-neon-source-copy-catalog-with-gettext.md), reviewed at `4aa85bce33f6846c0213f62574e779040cd01d23`. The reference application was not modified. See the [extraction record and release gates](docs/extraction-plan.md) and the independently versioned [JavaScript package](https://github.com/Heroyt/lsr-text-catalog-js).
+
+## Installation
+
+Install with Composer from [Packagist](https://packagist.org/packages/lsr/text-catalog):
+
+```sh
+composer require lsr/text-catalog
+```
+
+The standard Packagist installation needs no custom Composer repository. To use the optional Vue/Vite integration, install the independently versioned [`@lsr/text-catalog`](https://www.npmjs.com/package/@lsr/text-catalog) npm package as well.
 
 ## Requirements
 
@@ -12,7 +22,7 @@ The behavioral reference is [code-hunt-game ADR 0007](https://github.com/eSoul-c
 - Optional command: install `symfony/console ^7.4 || ^8.0`; `lsr/console ^0.2` can discover the registered service.
 - Optional native translation adapter: enable `ext-gettext`; the application configures locale, domain binding and encoding.
 
-For local development, use a Composer `path` repository with `options.symlink: true` and an explicit development version constraint. Nothing in this repository installs the package into an application or publishes it to Satis.
+For local package development, use a Composer `path` repository with `options.symlink: true` and an explicit development version constraint. Consumer applications should normally use released packages rather than local links.
 
 ## Standalone compilation
 
@@ -133,6 +143,8 @@ PHP CS Fixer replaces the sibling packages' coding-standard tooling here. [.php-
 
 The [extraction record](docs/extraction-plan.md) records package and external-consumer evidence, tested dependency versions and remaining release gates.
 
-## License and publication
+## License and maintenance
 
-[MIT](LICENSE), copyright (c) 2026 Tomáš Vojík. Extraction and package licensing were authorized; the reference application's license remains unchanged. Origin: [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog). Registry ownership, release versions, tags, push and Satis publication require a separately authorized release. No application migration is included.
+[MIT](LICENSE), copyright (c) 2026 Tomáš Vojík. Source and issue tracking: [Heroyt/lsr-text-catalog](https://github.com/Heroyt/lsr-text-catalog). Composer release versions are derived from Git tags; they are independent of npm versions and artifact format versions.
+
+Packagist registration and the LSR Satis repository are separate distribution channels. The workspace Satis configuration includes this repository, but changing that configuration does not build/upload Satis metadata or submit a package to Packagist. Maintainer release authorization and the current publication state are recorded in the [release gates](docs/extraction-plan.md).
