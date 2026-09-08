@@ -1,0 +1,23 @@
+{
+  "name": "lsr/text-catalog",
+  "description": "Unpublished skeleton for a future standalone NEON text catalog and gettext compiler.",
+  "type": "library",
+  "license": "proprietary",
+  "homepage": "https://github.com/Heroyt/lsr-text-catalog",
+  "support": {
+    "source": "https://github.com/Heroyt/lsr-text-catalog"
+  },
+  "require": {
+    "php": ">=8.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "Lsr\\TextCatalog\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Tests\\": "tests/"
+    }
+  }
+}
