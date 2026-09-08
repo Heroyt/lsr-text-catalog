@@ -1,6 +1,6 @@
 {
   "name": "lsr/text-catalog",
-  "description": "Unpublished skeleton for a future standalone NEON text catalog and gettext compiler.",
+  "description": "Standalone NEON source-copy catalog, gettext compiler, and optional framework integrations.",
   "type": "library",
   "license": "MIT",
   "homepage": "https://github.com/Heroyt/lsr-text-catalog",
@@ -8,7 +8,30 @@
     "source": "https://github.com/Heroyt/lsr-text-catalog"
   },
   "require": {
-    "php": ">=8.5"
+    "php": ">=8.5",
+    "ext-dom": "*",
+    "ext-libxml": "*",
+    "gettext/gettext": "^5.7",
+    "nette/neon": "^3.4"
+  },
+  "require-dev": {
+    "friendsofphp/php-cs-fixer": "^3.95",
+    "nette/di": "^3.2",
+    "phpstan/phpstan": "^2.0",
+    "phpunit/phpunit": "^13",
+    "symfony/console": "^7.4 || ^8.0"
+  },
+  "suggest": {
+    "nette/di": "^3.2 for the optional TextCatalogExtension.",
+    "symfony/console": "^7.4 || ^8.0 for the optional catalog compilation command.",
+    "lsr/console": "^0.2 for command discovery in LSR applications."
+  },
+  "scripts": {
+    "cs:fix": "./vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.php",
+    "cbf": "@cs:fix",
+    "cs": "./vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.php --dry-run --diff",
+    "phpstan": "./vendor/bin/phpstan analyse",
+    "test": "./vendor/bin/phpunit"
   },
   "autoload": {
     "psr-4": {
