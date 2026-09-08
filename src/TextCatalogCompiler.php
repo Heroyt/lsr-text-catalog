@@ -291,7 +291,7 @@ final readonly class TextCatalogCompiler
         $sourceLocaleJson = $this->json($this->config->sourceLocale);
         $localesJson = $this->json($this->config->locales);
         $compiled = <<<TYPESCRIPT
-import type { Translations } from '@lsr/text-catalog/types';
+import type { Translations } from 'lsr-text-catalog/types';
 
 export type TextKey = {$textKeyType};
 export type HtmlTextKey = {$htmlTextKeyType};
@@ -307,7 +307,7 @@ TYPESCRIPT;
         $catalogJson = $this->typeScriptValue((object) $definition->texts);
         $htmlKeysJson = $this->json(array_keys($definition->htmlKeys));
         $runtime = <<<TYPESCRIPT
-import type { Translations } from '@lsr/text-catalog/types';
+import type { Translations } from 'lsr-text-catalog/types';
 
 export const catalog = {$catalogJson} as const;
 export type TextKey = keyof typeof catalog;
