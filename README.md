@@ -20,7 +20,8 @@ The standard Packagist installation needs no custom Composer repository. To use 
 - No mandatory LSR framework, container, native gettext, Node, Vue, Redis, or application bootstrap dependency.
 - Optional DI: install `nette/di ^3.2`.
 - Optional command: install `symfony/console ^7.4 || ^8.0`; `lsr/console ^0.2` can discover the registered service.
-- Optional native translation adapter: enable `ext-gettext`; the application configures locale, domain binding and encoding.
+- Optional translation adapter: install [`lsr/translations ^0.1`](https://github.com/Heroyt/lsr-translations) (requires `ext-gettext`); the application, its framework adapter or `lsr/translations` configures locale, domain binding and encoding.
+- Optional Laravel integration: `laravel/framework ^12.0 || ^13.0`; older Laravel versions conflict.
 
 For local package development, use a Composer `path` repository with `options.symlink: true` and an explicit development version constraint. Consumer applications should normally use released packages rather than local links.
 
@@ -102,17 +103,22 @@ textCatalog:
     frontendDirectory: %appDir%/generated
     useCompiledCache: true
     command: true
+    translator: true
+    sanitizer: @htmlSanitizer
 ```
 
 The extension registers the same config, loader, lookup and compiler services. `command: true` adds `Lsr\TextCatalog\Console\CompileTextCatalogCommand`, named **`texts:cache:compile`**. Register it with Symfony Console directly or let `lsr/console` discover it in the consumer container. The consumer owns its actual `bin/console`; the package does not bootstrap an application. Command descriptions and diagnostics require no catalog keys. Compilation errors produce a failure exit status.
 
-## Native translation and HTML
+`translator: true` (requires `lsr/translations`) registers `TextTranslator` as `textCatalog.translator`. It uses the container's `Lsr\Translations\MessageTranslator` service when one exists and otherwise registers a native `GettextTranslator` as `textCatalog.messageTranslator`. `sanitizer` is an optional service reference or statement for the HTML sanitizer. In LSR applications, add the catalog domain to Core's `translations.domains` and keep `languageDirectory` equal to `LANGUAGE_DIR` so Core binds the domain whenever it switches the language.
 
-`Lsr\TextCatalog\Translation\TextTranslator` is an injected adapter, not a global helper autoload:
+## Translation and HTML
+
+`Lsr\TextCatalog\Translation\TextTranslator` is an injected adapter, not a global helper autoload. It translates through any [`lsr/translations`](https://github.com/Heroyt/lsr-translations) `MessageTranslator`:
 
 ```php
 $translator = new Lsr\TextCatalog\Translation\TextTranslator(
     $catalog,
+    new Lsr\Translations\GettextTranslator('example'),
     domain: 'example',
     sanitizeHtml: $applicationSanitizer,
 );
@@ -124,11 +130,49 @@ $count = $translator->langText(
 $html = $translator->langHtmlText('example.rich', ['name' => $untrustedName]);
 ```
 
-Configure native gettext (`setlocale`, environment where required, `bindtextdomain`, encoding) in application bootstrap. Named `%{name}` interpolation and numeric `sprintf` arguments are supported; mixed numeric/named argument sets are rejected. Plain strings remain unescaped data: use the consumer's normal escaped rendering.
+The semantic key is the gettext context; plural keys use their parent key. The native translator reads the process locale: select it with `Lsr\Translations\Localization`, a framework adapter, or the application's own `setlocale`/`bindtextdomain` setup, and bind the catalog domain to `languageDirectory`. Named `%{name}` interpolation and numeric `sprintf` arguments are supported; mixed numeric/named argument sets are rejected. Plain strings remain unescaped data: use the consumer's normal escaped rendering.
 
 HTML eligibility is checked, translation/interpolation runs, and **then** the application sanitizer processes the final output. Missing sanitizer rejects HTML calls. Source HTML validation is not a replacement for output sanitization. The package supplies no no-op sanitizer or application-specific policy. Native gettext locale/domain state is process-global: long-running applications must serialize/reset it appropriately; constructing this adapter does not isolate concurrent native locale changes.
 
-Verify native locale reset on the deployment platform. On the macOS verification host, changing `setlocale` and environment variables alone retained a cached translation; explicitly changing the default `textdomain` invalidated that native cache in the sequential-request smoke check. This is application/process setup, not a portable per-request isolation guarantee supplied by the adapter. Use isolated workers when native global state cannot be reset safely.
+Verify native locale reset on the deployment platform. On the macOS verification host, changing `setlocale` and environment variables alone retained a cached translation; explicitly re-selecting the default `textdomain` invalidated that native cache in the sequential-request smoke check. `lsr/translations` does this on every locale switch; it is still not a per-request isolation guarantee for concurrent requests in one process. Use isolated workers when native global state cannot be reset safely.
+
+## Laravel
+
+Laravel 12 and 13 discover `Lsr\TextCatalog\Laravel\TextCatalogServiceProvider` automatically. Publish and adjust the configuration:
+
+```sh
+php artisan vendor:publish --tag=text-catalog-config
+```
+
+| Key | Default |
+| --- | --- |
+| `source_directory` | `resource_path('text-catalog')` |
+| `cache_file` | `base_path('bootstrap/cache/text-catalog.php')` |
+| `language_directory` | `lang_path('gettext')` |
+| `source_root` | `base_path()` |
+| `domain` | `catalog` |
+| `locales` / `source_locale` | `['en_US']` / `en_US` |
+| `frontend_directory` / `pot_file` | `null` |
+| `use_compiled_cache` | `true` |
+| `sanitizer` | `null`, or a container-resolvable callable class/binding |
+
+The provider registers the catalog services and the Artisan command:
+
+```sh
+php artisan texts:cache:compile
+```
+
+Compile during the build or deployment pipeline, not during requests. A Vite `compile()` callback can run `php artisan texts:cache:compile`.
+
+With `lsr/translations` installed (its provider mirrors Laravel's locale into gettext), the provider also binds `TextTranslator`, binds the catalog domain to `language_directory` on every locale switch, and adds Blade directives:
+
+```blade
+<h1>@langText('example.title', format: ['name' => $user->name])</h1>
+<p>@langText('example.count.one', 'example.count.plural', $count, ['count' => $count])</p>
+<div>@langHtmlText('example.rich', ['name' => $user->name])</div>
+```
+
+`@langText` escapes its output. `@langHtmlText` echoes the configured sanitizer's output raw and fails without a sanitizer. Add every target locale to both `text-catalog.locales` and `lsr-translations.supported_languages`.
 
 ## Development and verification
 
