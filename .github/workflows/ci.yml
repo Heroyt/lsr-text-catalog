@@ -12,6 +12,11 @@ jobs:
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        testbench: ['^10.0', '^11.0']
+    name: Testbench ${{ matrix.testbench }}
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -21,12 +26,12 @@ jobs:
           coverage: none
           tools: composer:v2
       - name: Generate test locale
-        run: sudo locale-gen cs_CZ.UTF-8
+        run: sudo locale-gen cs_CZ.UTF-8 en_US.UTF-8
       - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: composer update --prefer-dist --no-interaction --no-progress --with "orchestra/testbench:${{ matrix.testbench }}"
       - name: CS
         run: composer cs
       - name: PHPStan
-        run: composer phpstan -- --no-progress
+        run: composer phpstan -- --no-progress --memory-limit=1G
       - name: PHPUnit
         run: composer test -- --no-coverage --fail-on-skipped
