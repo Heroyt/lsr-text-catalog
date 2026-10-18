@@ -36,13 +36,19 @@
     "nette/di": "^3.2",
     "phpstan/phpstan": "^2.0",
     "phpunit/phpunit": "^13",
-    "symfony/console": "^7.4 || ^8.0"
+    "symfony/console": "^7.4 || ^8.0",
+    "lsr/translations": "^0.1",
+    "orchestra/testbench": "^10.0 || ^11.0"
   },
   "suggest": {
-    "ext-gettext": "Required by the optional native TextTranslator adapter.",
+    "lsr/translations": "^0.1 for the optional TextTranslator adapter (native gettext, requires ext-gettext).",
+    "laravel/framework": "^12.0 || ^13.0 for the optional Laravel service provider.",
     "nette/di": "^3.2 for the optional TextCatalogExtension.",
     "symfony/console": "^7.4 || ^8.0 for the optional catalog compilation command.",
     "lsr/console": "^0.2 for command discovery in LSR applications."
+  },
+  "conflict": {
+    "laravel/framework": "<12.0"
   },
   "scripts": {
     "cs:fix": "./vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.php",
@@ -59,6 +65,13 @@
   "autoload-dev": {
     "psr-4": {
       "Tests\\": "tests/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Lsr\\TextCatalog\\Laravel\\TextCatalogServiceProvider"
+      ]
     }
   }
 }

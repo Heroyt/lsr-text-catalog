@@ -14,13 +14,17 @@ use Lsr\TextCatalog\Di\TextCatalogExtension;
 use Lsr\TextCatalog\TextCatalog;
 use Lsr\TextCatalog\TextCatalogLoader;
 use Lsr\TextCatalog\Translation\TextTranslator;
+use Lsr\Translations\GettextTranslator;
+use Lsr\Translations\MessageTranslator;
 use Nette\DI\Compiler;
 use Nette\DI\Container;
 use Nette\DI\ContainerLoader;
+use Nette\DI\Definitions\Statement;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use Symfony\Component\Console\Tester\CommandTester;
+use Tests\Support\StripTagsSanitizer;
 
 final class CatalogIntegrationTest extends TestCase
 {
@@ -79,6 +83,19 @@ NEON);
         self::assertFileDoesNotExist($this->directory . '/cache/catalog.php');
     }
 
+    public function test_di_translator_uses_a_native_translator_unless_the_application_provides_one(): void {
+        $options = ['translator' => true, 'sanitizer' => '@sanitizer'];
+        $services = ['sanitizer' => StripTagsSanitizer::class];
+        $container = $this->container(false, $options, $services);
+        self::assertInstanceOf(TextTranslator::class, $container->getByType(TextTranslator::class));
+        self::assertTrue($container->hasService('texts.messageTranslator'));
+
+        $application = $this->container(false, $options, $services + ['appTranslator' => new Statement(GettextTranslator::class, ['application'])]);
+        self::assertInstanceOf(TextTranslator::class, $application->getByType(TextTranslator::class));
+        self::assertFalse($application->hasService('texts.messageTranslator'));
+        self::assertSame($application->getService('appTranslator'), $application->getByType(MessageTranslator::class));
+    }
+
     public function test_native_context_plural_interpolation_and_sanitizer_order(): void {
         if ( ! extension_loaded('gettext')) {
             self::markTestSkipped('Native adapter requires ext-gettext.');
@@ -116,14 +133,14 @@ NEON);
             bindtextdomain($domain, $this->directory . '/languages');
             bind_textdomain_codeset($domain, 'UTF-8');
             $catalog = new TextCatalog(new TextCatalogLoader($this->directory . '/copy'), $this->directory . '/cache.php', false);
-            $translator = new TextTranslator($catalog, $domain, static fn (string $html): string => strip_tags($html));
+            $translator = new TextTranslator($catalog, new GettextTranslator($domain), $domain, new StripTagsSanitizer());
             self::assertSame('Ahoj Ada', $translator->langText('example.title', format: ['name' => 'Ada']));
             self::assertSame('Vítej Ada', $translator->langText('example.other', format: ['name' => 'Ada']));
             self::assertSame('3 položky', $translator->langText('example.count.one', 'example.count.plural', 3, ['count' => 3]));
             self::assertSame('8 položek', $translator->langText('example.count.one', 'example.count.plural', 8, ['count' => 8]));
-            self::assertSame('Ada', $translator->langHtmlText('example.rich', ['name' => '<b>Ada</b>']));
+            self::assertSame('<em>Ada</em>', $translator->langHtmlText('example.rich', ['name' => '<b>Ada</b>']));
             $this->expectException(LogicException::class);
-            (new TextTranslator($catalog, $domain))->langHtmlText('example.rich');
+            (new TextTranslator($catalog, new GettextTranslator($domain), $domain))->langHtmlText('example.rich');
         } finally {
             foreach ($previousEnvironment as $name => $value) {
                 putenv($value === false ? $name : $name . '=' . $value);
@@ -134,12 +151,14 @@ NEON);
         }
     }
 
-    private function container(bool $command): Container {
+    /**
+     * @param array<string, mixed> $options
+     * @param array<string, string|Statement> $services
+     */
+    private function container(bool $command, array $options = [], array $services = []): Container {
         $directory = $this->directory;
-        $loader = new ContainerLoader($directory . '/di', true);
-        $class = $loader->load(static function (Compiler $compiler) use ($directory, $command): null {
-            $compiler->addExtension('texts', new TextCatalogExtension());
-            $compiler->addConfig(['texts' => [
+        $config = [
+            'texts' => [
                 'sourceDirectory' => $directory . '/copy',
                 'sourceRoot' => $directory,
                 'cacheFile' => $directory . '/cache/catalog.php',
@@ -148,9 +167,16 @@ NEON);
                 'locales' => ['en_US'],
                 'sourceLocale' => 'en_US',
                 'command' => $command,
-            ]]);
+                ...$options,
+            ],
+            'services' => $services,
+        ];
+        $loader = new ContainerLoader($directory . '/di', true);
+        $class = $loader->load(static function (Compiler $compiler) use ($config): null {
+            $compiler->addExtension('texts', new TextCatalogExtension());
+            $compiler->addConfig($config);
             return null;
-        }, [$directory, $command]);
+        }, serialize($config));
         return new $class();
     }
 }

@@ -10,7 +10,11 @@ use Lsr\TextCatalog\Console\CompileTextCatalogCommand;
 use Lsr\TextCatalog\TextCatalog;
 use Lsr\TextCatalog\TextCatalogCompiler;
 use Lsr\TextCatalog\TextCatalogLoader;
+use Lsr\TextCatalog\Translation\TextTranslator;
+use Lsr\Translations\GettextTranslator;
+use Lsr\Translations\MessageTranslator;
 use Nette\DI\CompilerExtension;
+use Nette\DI\Definitions\Statement;
 use Nette\Schema\Expect;
 use Nette\Schema\Schema;
 use Symfony\Component\Console\Command\Command;
@@ -27,7 +31,9 @@ use Symfony\Component\Console\Command\Command;
  *     frontendDirectory: ?string,
  *     potFile: ?string,
  *     useCompiledCache: bool,
- *     command: bool
+ *     command: bool,
+ *     translator: bool,
+ *     sanitizer: string|Statement|null
  * } $config
  */
 final class TextCatalogExtension extends CompilerExtension
@@ -45,6 +51,8 @@ final class TextCatalogExtension extends CompilerExtension
             'potFile' => Expect::string()->nullable(),
             'useCompiledCache' => Expect::bool(false),
             'command' => Expect::bool(false),
+            'translator' => Expect::bool(false),
+            'sanitizer' => Expect::anyOf(Expect::string(), Expect::type(Statement::class))->nullable(),
         ]);
     }
 
@@ -83,6 +91,27 @@ final class TextCatalogExtension extends CompilerExtension
             }
             $builder->addDefinition($this->prefix('command'))
                 ->setFactory(CompileTextCatalogCommand::class, ['@' . $this->prefix('compiler')]);
+        }
+
+        if ($config->translator) {
+            if ( ! interface_exists(MessageTranslator::class)) {
+                throw new LogicException('Text catalog translator registration requires lsr/translations.');
+            }
+            $builder->addDefinition($this->prefix('translator'))
+                ->setFactory(TextTranslator::class, [
+                    'catalog' => '@' . $this->prefix('catalog'),
+                    'domain' => $config->domain,
+                    'sanitizeHtml' => $config->sanitizer,
+                ]);
+        }
+    }
+
+    public function beforeCompile(): void {
+        $builder = $this->getContainerBuilder();
+        // Reuse the application's translator; otherwise register a native one for the catalog domain.
+        if ($this->config->translator && $builder->findByType(MessageTranslator::class) === []) {
+            $builder->addDefinition($this->prefix('messageTranslator'))
+                ->setFactory(GettextTranslator::class, [$this->config->domain]);
         }
     }
 }

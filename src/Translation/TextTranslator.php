@@ -8,8 +8,12 @@ use Closure;
 use InvalidArgumentException;
 use LogicException;
 use Lsr\TextCatalog\TextCatalog;
+use Lsr\Translations\MessageTranslator;
 
-/** Native gettext adapter; the application owns locale/domain binding and HTML policy. */
+/**
+ * Translates catalog keys through an `lsr/translations` translator. The semantic key is the gettext context
+ * (the parent key for plurals); the application owns the locale and the HTML policy.
+ */
 final readonly class TextTranslator
 {
     private ?Closure $sanitizeHtml;
@@ -17,12 +21,10 @@ final readonly class TextTranslator
     /** @param null|callable(string): string $sanitizeHtml */
     public function __construct(
         private TextCatalog $catalog,
+        private MessageTranslator $translator,
         private string $domain,
         ?callable $sanitizeHtml = null,
     ) {
-        if ( ! extension_loaded('gettext')) {
-            throw new LogicException('Native text translation requires ext-gettext.');
-        }
         if ($domain === '') {
             throw new InvalidArgumentException('The gettext domain must not be empty.');
         }
@@ -44,33 +46,14 @@ final readonly class TextTranslator
             $plural = $this->catalog->text($pluralKey);
         }
 
-        $message = $context . "\004" . $this->catalog->text($key);
-        $translated = $plural === null
-            ? dgettext($this->domain, $message)
-            : dngettext($this->domain, $message, $plural, $num);
-        $separator = strpos($translated, "\004");
-        if ($separator !== false) {
-            $translated = substr($translated, $separator + 1);
-        }
-        if ($format === []) {
-            return $translated;
-        }
-        $numericKeys = array_filter(array_keys($format), 'is_int');
-        if ($numericKeys !== [] && count($numericKeys) !== count($format)) {
-            throw new InvalidArgumentException('Format parameters cannot mix numeric and named keys.');
-        }
-        if ($numericKeys !== []) {
-            return sprintf($translated, ...array_values($format));
-        }
-
-        return preg_replace_callback(
-            '/%\{((?:.|\n)+?)\}/',
-            static function (array $matches) use ($format): string {
-                $name = trim($matches[1]);
-                return array_key_exists($name, $format) ? (string) $format[$name] : $matches[0];
-            },
-            $translated,
-        ) ?? $translated;
+        return $this->translator->translate(
+            $this->catalog->text($key),
+            plural: $plural,
+            num: $num,
+            context: $context,
+            domain: $this->domain,
+            format: $format,
+        );
     }
 
     /** @param array<int|string, bool|float|int|string|null> $format */
