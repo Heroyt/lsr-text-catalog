@@ -13,6 +13,7 @@ use Gettext\Translations;
 use InvalidArgumentException;
 use JsonException;
 use Lsr\TextCatalog\CatalogConfig;
+use Lsr\TextCatalog\Console\CompileTextCatalogCommand;
 use Lsr\TextCatalog\TextCatalog;
 use Lsr\TextCatalog\TextCatalogCompiler;
 use Lsr\TextCatalog\TextCatalogLoader;
@@ -23,6 +24,8 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use stdClass;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Tester\CommandTester;
 
 final class TextCatalogTest extends TestCase
 {
@@ -229,7 +232,7 @@ NEON);
         self::assertSame(['shelf.title' => $source], (array) $manifest->texts);
         self::assertSame([], (array) $manifest->htmlKeys);
         self::assertSame([], (array) $manifest->plurals);
-        self::assertSame(1, $manifest->formatVersion);
+        self::assertSame(2, $manifest->formatVersion);
         self::assertSame('library', $manifest->domain);
         self::assertSame('en_US', $manifest->sourceLocale);
         self::assertSame(['en_US'], $manifest->locales);
@@ -237,15 +240,367 @@ NEON);
         self::assertSame('catalog.compiled.ts', $manifest->artifacts->compiled->path);
         $runtimeHash = hash_file('sha256', $config->frontendDirectory . '/catalog.ts');
         $compiledHash = hash_file('sha256', $config->frontendDirectory . '/catalog.compiled.ts');
+        $groupHash = hash_file('sha256', $config->frontendDirectory . '/texts/shelf.ts');
         self::assertSame($runtimeHash, $manifest->artifacts->runtime->sha256);
         self::assertSame($compiledHash, $manifest->artifacts->compiled->sha256);
+        self::assertInstanceOf(stdClass::class, $manifest->artifacts->groups);
+        self::assertSame(['shelf'], array_keys((array) $manifest->artifacts->groups));
+        self::assertSame('texts/shelf.ts', $manifest->artifacts->groups->shelf->source->path);
+        self::assertSame($groupHash, $manifest->artifacts->groups->shelf->source->sha256);
+        self::assertInstanceOf(stdClass::class, $manifest->artifacts->groups->shelf->translations);
+        self::assertSame([], (array) $manifest->artifacts->groups->shelf->translations);
         $canonical = '{"artifacts":{"compiled":{"path":"catalog.compiled.ts","sha256":"' . $compiledHash
-            . '"},"runtime":{"path":"catalog.ts","sha256":"' . $runtimeHash
-            . '"}},"domain":"library","formatVersion":1,"htmlKeys":{},"locales":["en_US"],"plurals":{},'
+            . '"},"groups":{"shelf":{"source":{"path":"texts/shelf.ts","sha256":"' . $groupHash
+            . '"},"translations":{}}},"runtime":{"path":"catalog.ts","sha256":"' . $runtimeHash
+            . '"}},"domain":"library","formatVersion":2,"htmlKeys":{},"locales":["en_US"],"plurals":{},'
             . '"sourceLocale":"en_US","texts":{"shelf.title":"' . $source . '"}}';
         self::assertSame(hash('sha256', $canonical), $manifest->generation);
         self::assertSame($manifest->generation, $result->generation);
         self::assertSame($result->generation, $this->compiler($config)->compile()->generation);
+        self::assertSame(['catalog.build.json', 'catalog.compiled.ts', 'catalog.ts', 'texts'], $this->frontendFiles());
+        self::assertSame(['shelf.ts'], $this->frontendFiles('texts'));
+        self::assertSame(
+            "import type { CatalogSourceTexts } from 'lsr-text-catalog/types';\n\n"
+            . 'export default {"title":"' . $source . "\"} satisfies CatalogSourceTexts;\n",
+            file_get_contents($config->frontendDirectory . '/texts/shelf.ts'),
+        );
+    }
+
+    public function test_frontend_groups_are_split_per_root_key_and_non_source_locale(): void {
+        $this->writeSource('game.neon', <<<'NEON'
+game:
+    title: Play
+    count:
+        one: '%{count} game'
+        plural: '%{count} games'
+NEON);
+        $this->writeSource('shop.neon', "shop:\n    cart: Cart\n");
+        $this->writeCzechPo();
+        $config = $this->config(['en_US', 'cs_CZ']);
+        $result = $this->compiler($config)->compile();
+        $directory = (string) $config->frontendDirectory;
+
+        self::assertSame(['catalog.build.json', 'catalog.compiled.ts', 'catalog.ts', 'texts'], $this->frontendFiles());
+        // The source locale contributes no translation module.
+        self::assertSame(['game.cs_CZ.ts', 'game.ts', 'shop.cs_CZ.ts', 'shop.ts'], $this->frontendFiles('texts'));
+
+        $header = "import type { CatalogSourceTexts } from 'lsr-text-catalog/types';\n\n";
+        self::assertSame(
+            $header . 'export default {"count.one":"%{count} game","count.plural":"%{count} games","title":"Play"} satisfies CatalogSourceTexts;' . "\n",
+            file_get_contents($directory . '/texts/game.ts'),
+        );
+        self::assertSame(
+            $header . 'export default {"cart":"Cart"} satisfies CatalogSourceTexts;' . "\n",
+            file_get_contents($directory . '/texts/shop.ts'),
+        );
+        $messagesHeader = "import type { CatalogMessages } from 'lsr-text-catalog/types';\n\n";
+        // The plural context is the parent key, which belongs to the same group; entries are ordered by msgid.
+        self::assertSame(
+            $messagesHeader . 'export default {"%{count} game":{"game.count":["%{count} hra","%{count} hry","%{count} her"]},"Play":{"game.title":"Hrát"}} satisfies CatalogMessages;' . "\n",
+            file_get_contents($directory . '/texts/game.cs_CZ.ts'),
+        );
+        self::assertSame(
+            $messagesHeader . 'export default {"Cart":{"shop.cart":"Košík"}} satisfies CatalogMessages;' . "\n",
+            file_get_contents($directory . '/texts/shop.cs_CZ.ts'),
+        );
+
+        self::assertSame(
+            "import type { RuntimeCatalogGroups } from 'lsr-text-catalog/types';\n\n"
+            . 'export type TextKey = "game.count.one" | "game.count.plural" | "game.title" | "shop.cart";' . "\n"
+            . "export type HtmlTextKey = never;\n"
+            . 'export type TextGroup = "game" | "shop";' . "\n"
+            . "export const htmlTextKeys = [] as readonly TextKey[];\n"
+            . "export const sourceLocale = \"en_US\" as const;\n"
+            . "export const locales = [\"en_US\",\"cs_CZ\"] as const;\n"
+            . "export const catalogGroups = {\n"
+            . "    \"game\": {\n"
+            . "        source: () => import('./texts/game.js'),\n"
+            . "        translations: {\n"
+            . "            \"cs_CZ\": () => import('./texts/game.cs_CZ.js'),\n"
+            . "        },\n"
+            . "    },\n"
+            . "    \"shop\": {\n"
+            . "        source: () => import('./texts/shop.js'),\n"
+            . "        translations: {\n"
+            . "            \"cs_CZ\": () => import('./texts/shop.cs_CZ.js'),\n"
+            . "        },\n"
+            . "    },\n"
+            . "} satisfies RuntimeCatalogGroups<TextGroup>;\n",
+            file_get_contents($directory . '/catalog.ts'),
+        );
+        self::assertSame(
+            "import type { CompiledCatalogGroups } from 'lsr-text-catalog/types';\n\n"
+            . 'export type TextKey = "game.count.one" | "game.count.plural" | "game.title" | "shop.cart";' . "\n"
+            . "export type HtmlTextKey = never;\n"
+            . 'export type TextGroup = "game" | "shop";' . "\n"
+            . "export const sourceLocale = \"en_US\" as const;\n"
+            . "export const locales = [\"en_US\",\"cs_CZ\"] as const;\n"
+            . "export const catalogGroups = {\n"
+            . "    \"game\": {\n"
+            . "        translations: {\n"
+            . "            \"cs_CZ\": () => import('./texts/game.cs_CZ.js'),\n"
+            . "        },\n"
+            . "    },\n"
+            . "    \"shop\": {\n"
+            . "        translations: {\n"
+            . "            \"cs_CZ\": () => import('./texts/shop.cs_CZ.js'),\n"
+            . "        },\n"
+            . "    },\n"
+            . "} satisfies CompiledCatalogGroups<TextGroup>;\n\n"
+            . "// Authoring declaration: value uses must be expanded by the textCatalog Vite plugin.\n"
+            . "export declare function text(key: TextKey): string;\n",
+            file_get_contents($directory . '/catalog.compiled.ts'),
+        );
+
+        $manifest = json_decode((string) file_get_contents((string) $result->manifestFile), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($manifest);
+        $expectedArtifacts = [];
+        foreach (['game', 'shop'] as $group) {
+            $expectedArtifacts[$group] = [
+                'source' => ['path' => 'texts/' . $group . '.ts', 'sha256' => hash_file('sha256', $directory . '/texts/' . $group . '.ts')],
+                'translations' => ['cs_CZ' => [
+                    'path' => 'texts/' . $group . '.cs_CZ.ts',
+                    'sha256' => hash_file('sha256', $directory . '/texts/' . $group . '.cs_CZ.ts'),
+                ]],
+            ];
+        }
+        self::assertSame(['en_US', 'cs_CZ'], $manifest['locales']);
+        self::assertSame($expectedArtifacts, $manifest['artifacts']['groups']);
+
+        // The generation digest covers everything except itself, including the group artifact digests.
+        $withoutGeneration = json_decode((string) file_get_contents((string) $result->manifestFile), flags: JSON_THROW_ON_ERROR);
+        self::assertInstanceOf(stdClass::class, $withoutGeneration);
+        unset($withoutGeneration->generation);
+        self::assertSame($manifest['generation'], hash('sha256', $this->canonicalize($withoutGeneration)));
+        self::assertSame($result->generation, $manifest['generation']);
+    }
+
+    public function test_case_colliding_groups_fail_without_publishing_anything(): void {
+        $this->writeSource('fooBar/item.neon', "item:\n    title: One\n");
+        $this->writeSource('foobar.neon', "foobar:\n    title: Two\n");
+        try {
+            $this->compiler($this->config())->compile();
+            self::fail('Groups differing only by letter case must block publication.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('letter case', $exception->getMessage());
+            self::assertSame([], $this->artifactBytes());
+            self::assertFileDoesNotExist($this->temporaryDirectory . '/frontend/catalog.build.json');
+        }
+    }
+
+    public function test_root_leaf_key_equal_to_its_group_is_stored_under_the_empty_string(): void {
+        $this->writeSource('title.neon', "title: Heading\n");
+        $this->writeSource('game.neon', "game:\n    title: Play\n");
+        $config = $this->config();
+        $this->compiler($config)->compile();
+        $header = "import type { CatalogSourceTexts } from 'lsr-text-catalog/types';\n\n";
+        self::assertSame(
+            $header . 'export default {"":"Heading"} satisfies CatalogSourceTexts;' . "\n",
+            file_get_contents($config->frontendDirectory . '/texts/title.ts'),
+        );
+        self::assertSame(
+            $header . 'export default {"title":"Play"} satisfies CatalogSourceTexts;' . "\n",
+            file_get_contents($config->frontendDirectory . '/texts/game.ts'),
+        );
+    }
+
+    public function test_case_only_group_rename_publishes_the_exact_new_file_name(): void {
+        $config = $this->config();
+        $directory = (string) $config->frontendDirectory;
+        $renames = [
+            // Identical bytes under the new name must still rename the entry.
+            ['fooBar', 'foobar', 'One', 'One'],
+            ['foobar', 'fooBar', 'One', 'Two'],
+        ];
+        $this->writeSource('fooBar.neon', "fooBar:\n    title: One\n");
+        $this->compiler($config)->compile();
+        self::assertSame(['fooBar.ts'], $this->frontendFiles('texts'));
+        foreach ($renames as [$from, $to, , $text]) {
+            unlink($this->temporaryDirectory . '/texts/' . $from . '.neon');
+            $this->writeSource($to . '.neon', $to . ":\n    title: " . $text . "\n");
+            $result = $this->compiler($config)->compile();
+
+            self::assertSame([$to . '.ts'], $this->frontendFiles('texts'));
+            self::assertSame([], $result->staleCleanupFailures);
+            $manifest = json_decode((string) file_get_contents($directory . '/catalog.build.json'), flags: JSON_THROW_ON_ERROR);
+            self::assertInstanceOf(stdClass::class, $manifest);
+            self::assertSame([$to], array_keys((array) $manifest->artifacts->groups));
+            self::assertSame('texts/' . $to . '.ts', $manifest->artifacts->groups->{$to}->source->path);
+            self::assertSame(hash_file('sha256', $directory . '/texts/' . $to . '.ts'), $manifest->artifacts->groups->{$to}->source->sha256);
+            self::assertSame([], $this->leftoverTemporaryFiles());
+        }
+    }
+
+    public function test_case_only_locale_rename_publishes_the_exact_new_translation_file_name(): void {
+        $this->writeSource('game.neon', "game:\n    title: Play\n");
+        $directory = $this->temporaryDirectory . '/frontend';
+        foreach (['cs_CZ', 'cs_cz'] as $locale) {
+            $this->writeCzechPo($locale);
+            $result = $this->compiler($this->config(['en_US', $locale]))->compile();
+
+            self::assertSame(['game.' . $locale . '.ts', 'game.ts'], $this->frontendFiles('texts'));
+            self::assertSame([], $result->staleCleanupFailures);
+            $manifest = json_decode((string) file_get_contents($directory . '/catalog.build.json'), flags: JSON_THROW_ON_ERROR);
+            self::assertInstanceOf(stdClass::class, $manifest);
+            $translation = $manifest->artifacts->groups->game->translations->{$locale};
+            self::assertSame('texts/game.' . $locale . '.ts', $translation->path);
+            self::assertSame(hash_file('sha256', $directory . '/texts/game.' . $locale . '.ts'), $translation->sha256);
+            self::assertSame([], $this->leftoverTemporaryFiles());
+        }
+    }
+
+    public function test_locales_with_at_sign_and_dots_produce_matching_file_names_specifiers_and_manifest_entries(): void {
+        $this->writeSource('game.neon', "game:\n    title: Play\n");
+        foreach (['sr@latin' => 'Igraj', 'de_DE.UTF-8' => 'Spielen'] as $locale => $translated) {
+            // gettext's language table does not know these identifiers, so only the header is set.
+            $po = Translations::create('library');
+            $po->getHeaders()->setLanguage((string) $locale);
+            $po->add(Translation::create('game.title', 'Play')->translate($translated));
+            $this->writePo($locale, $po);
+        }
+        $config = $this->config(['en_US', 'sr@latin', 'de_DE.UTF-8']);
+        $directory = (string) $config->frontendDirectory;
+        $result = $this->compiler($config)->compile();
+
+        self::assertSame(['game.de_DE.UTF-8.ts', 'game.sr@latin.ts', 'game.ts'], $this->frontendFiles('texts'));
+        self::assertSame(
+            "import type { CatalogMessages } from 'lsr-text-catalog/types';\n\n"
+            . 'export default {"Play":{"game.title":"Igraj"}} satisfies CatalogMessages;' . "\n",
+            file_get_contents($directory . '/texts/game.sr@latin.ts'),
+        );
+        foreach (['catalog.ts', 'catalog.compiled.ts'] as $module) {
+            $contents = (string) file_get_contents($directory . '/' . $module);
+            self::assertStringContainsString(
+                "        translations: {\n"
+                . "            \"sr@latin\": () => import('./texts/game.sr@latin.js'),\n"
+                . "            \"de_DE.UTF-8\": () => import('./texts/game.de_DE.UTF-8.js'),\n"
+                . "        },\n",
+                $contents,
+            );
+        }
+        $manifest = json_decode((string) file_get_contents((string) $result->manifestFile), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($manifest);
+        self::assertSame(['en_US', 'sr@latin', 'de_DE.UTF-8'], $manifest['locales']);
+        self::assertSame(
+            [
+                'sr@latin' => [
+                    'path' => 'texts/game.sr@latin.ts',
+                    'sha256' => hash_file('sha256', $directory . '/texts/game.sr@latin.ts'),
+                ],
+                'de_DE.UTF-8' => [
+                    'path' => 'texts/game.de_DE.UTF-8.ts',
+                    'sha256' => hash_file('sha256', $directory . '/texts/game.de_DE.UTF-8.ts'),
+                ],
+            ],
+            $manifest['artifacts']['groups']['game']['translations'],
+        );
+    }
+
+    public function test_locales_differing_only_by_case_fail_without_publishing_anything(): void {
+        $this->writeSource('game.neon', "game:\n    title: Play\n");
+        $this->writeCzechPo('cs_CZ');
+        $this->writeCzechPo('cs_cz');
+        $before = $this->artifactBytes();
+        try {
+            $this->compiler($this->config(['en_US', 'cs_CZ', 'cs_cz']))->compile();
+            self::fail('Locales differing only by letter case must block publication.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('letter case', $exception->getMessage());
+            self::assertSame($before, $this->artifactBytes());
+            self::assertFileDoesNotExist($this->temporaryDirectory . '/frontend/catalog.build.json');
+            self::assertFileDoesNotExist($this->temporaryDirectory . '/cache/catalog.php');
+        }
+    }
+
+    public function test_unchanged_artifacts_are_not_rewritten_and_changed_groups_only_touch_affected_files(): void {
+        $this->writeSource('game.neon', "game:\n    title: Play\n");
+        $this->writeSource('shop.neon', "shop:\n    cart: Cart\n");
+        $config = $this->config();
+        $directory = (string) $config->frontendDirectory;
+        $this->compiler($config)->compile();
+        $past = time() - 3600;
+        foreach (array_keys($this->artifactMtimes()) as $path) {
+            touch($path, $past);
+        }
+        $inodes = $this->artifactInodes();
+        $before = $this->artifactBytes();
+
+        $this->compiler($config)->compile();
+        self::assertSame(array_fill_keys(array_keys($before), $past), $this->artifactMtimes());
+        self::assertSame($inodes, $this->artifactInodes());
+        self::assertSame($before, $this->artifactBytes());
+
+        $this->writeSource('shop.neon', "shop:\n    cart: Basket\n");
+        $this->compiler($config)->compile();
+        $mtimes = $this->artifactMtimes();
+        $rewritten = array_keys(array_filter($mtimes, static fn (int $mtime): bool => $mtime !== $past));
+        sort($rewritten, SORT_STRING);
+        $expected = [
+            $config->cacheFile,
+            $directory . '/catalog.build.json',
+            $directory . '/texts/shop.ts',
+            $this->temporaryDirectory . '/languages/en_US/LC_MESSAGES/library.mo',
+            $this->temporaryDirectory . '/languages/en_US/LC_MESSAGES/library.po',
+            $config->potFile,
+        ];
+        sort($expected, SORT_STRING);
+        self::assertSame($expected, $rewritten);
+        self::assertStringContainsString('Basket', (string) file_get_contents($directory . '/texts/shop.ts'));
+    }
+
+    public function test_failed_stale_cleanup_is_reported_without_failing_compilation(): void {
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            self::markTestSkipped('Directory permissions do not restrict the superuser.');
+        }
+        $this->writeSource('game.neon', "game:\n    title: Play\n");
+        $this->writeSource('shop.neon', "shop:\n    cart: Cart\n");
+        $config = $this->config();
+        $texts = (string) $config->frontendDirectory . '/texts';
+        $this->compiler($config)->compile();
+        unlink($this->temporaryDirectory . '/texts/shop.neon');
+
+        chmod($texts, 0555);
+        try {
+            $tester = new CommandTester(new CompileTextCatalogCommand($this->compiler($config)));
+            $exitCode = $tester->execute([]);
+            clearstatcache();
+            self::assertSame(Command::SUCCESS, $exitCode);
+            self::assertStringContainsString('Compiled 1 text catalog entries.', $tester->getDisplay());
+            self::assertStringContainsString('Warning: unable to remove stale text catalog artifact: ' . $texts . '/shop.ts', $tester->getDisplay());
+            self::assertFileExists($texts . '/shop.ts');
+            // The new generation is live: the manifest no longer references the removed group.
+            $manifest = json_decode((string) file_get_contents((string) $config->frontendDirectory . '/catalog.build.json'), flags: JSON_THROW_ON_ERROR);
+            self::assertInstanceOf(stdClass::class, $manifest);
+            self::assertSame(['game'], array_keys((array) $manifest->artifacts->groups));
+
+            $result = $this->compiler($config)->compile();
+            self::assertSame([$texts . '/shop.ts'], $result->staleCleanupFailures);
+        } finally {
+            chmod($texts, 0755);
+        }
+        self::assertSame([], $this->compiler($config)->compile()->staleCleanupFailures);
+        self::assertSame(['game.ts'], $this->frontendFiles('texts'));
+    }
+
+    public function test_removed_groups_and_locales_delete_only_their_stale_text_modules_after_publication(): void {
+        $this->writeSource('game.neon', "game:\n    title: Play\n");
+        $this->writeSource('shop.neon', "shop:\n    cart: Cart\n");
+        $this->writeCzechPo();
+        $texts = $this->temporaryDirectory . '/frontend/texts';
+        $this->compiler($this->config(['en_US', 'cs_CZ']))->compile();
+        self::assertSame(['game.cs_CZ.ts', 'game.ts', 'shop.cs_CZ.ts', 'shop.ts'], $this->frontendFiles('texts'));
+        file_put_contents($texts . '/legacy.ts', 'stale');
+        file_put_contents($texts . '/notes.txt', 'keep');
+        mkdir($texts . '/nested');
+        file_put_contents($texts . '/nested/keep.ts', 'keep');
+
+        unlink($this->temporaryDirectory . '/texts/shop.neon');
+        $this->compiler($this->config(['en_US', 'cs_CZ']))->compile();
+        self::assertSame(['game.cs_CZ.ts', 'game.ts', 'nested', 'notes.txt'], $this->frontendFiles('texts'));
+        self::assertFileExists($texts . '/nested/keep.ts');
+
+        $this->compiler($this->config())->compile();
+        self::assertSame(['game.ts', 'nested', 'notes.txt'], $this->frontendFiles('texts'));
     }
 
     public function test_php_only_compilation_supports_custom_pot_path_without_frontend_artifacts(): void {
@@ -455,6 +810,47 @@ NEON);
         }
     }
 
+    private function canonicalize(mixed $value): string {
+        $flags = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_LINE_TERMINATORS;
+        if ($value instanceof stdClass) {
+            $members = (array) $value;
+            ksort($members, SORT_STRING);
+            $encoded = [];
+            foreach ($members as $key => $member) {
+                $encoded[] = json_encode((string) $key, $flags) . ':' . $this->canonicalize($member);
+            }
+            return '{' . implode(',', $encoded) . '}';
+        }
+        if (is_array($value)) {
+            return '[' . implode(',', array_map($this->canonicalize(...), $value)) . ']';
+        }
+        return json_encode($value, $flags);
+    }
+
+    /** @return list<string> Sorted entry names of the frontend directory (or one of its subdirectories). */
+    private function frontendFiles(string $subdirectory = ''): array {
+        $directory = $this->temporaryDirectory . '/frontend' . ($subdirectory === '' ? '' : '/' . $subdirectory);
+        $names = array_values(array_filter(
+            (array) scandir($directory),
+            static fn (mixed $name): bool => is_string($name) && ! in_array($name, ['.', '..', 'catalog.build.lock'], true),
+        ));
+        sort($names, SORT_STRING);
+        return $names;
+    }
+
+    private function writeCzechPo(string $locale = 'cs_CZ'): void {
+        $po = Translations::create('library', $locale);
+        $po->getHeaders()->setPluralForm(3, '(n == 1) ? 0 : (n >= 2 && n <= 4) ? 1 : 2');
+        $title = Translation::create('game.title', 'Play');
+        $title->translate('Hrát');
+        $count = Translation::create('game.count', '%{count} game');
+        $count->setPlural('%{count} games')->translate('%{count} hra')->translatePlural('%{count} hry', '%{count} her');
+        $cart = Translation::create('shop.cart', 'Cart');
+        $cart->translate('Košík');
+        $po->add($title)->add($count)->add($cart);
+        $this->writePo($locale, $po);
+    }
+
     private function writeSource(string $relativePath, string $contents): void {
         $path = $this->temporaryDirectory . '/texts/' . $relativePath;
         if ( ! is_dir(dirname($path))) {
@@ -509,5 +905,38 @@ NEON);
         }
         ksort($files, SORT_STRING);
         return $files;
+    }
+
+    /** @return array<string, int> */
+    private function artifactMtimes(): array {
+        clearstatcache();
+        $mtimes = [];
+        foreach (array_keys($this->artifactBytes()) as $path) {
+            $mtimes[$path] = (int) filemtime($path);
+        }
+        return $mtimes;
+    }
+
+    /** @return array<string, int> */
+    private function artifactInodes(): array {
+        clearstatcache();
+        $inodes = [];
+        foreach (array_keys($this->artifactBytes()) as $path) {
+            $inodes[$path] = (int) fileinode($path);
+        }
+        return $inodes;
+    }
+
+    /** @return list<string> Staging, backup and moved-aside files left behind by publication. */
+    private function leftoverTemporaryFiles(): array {
+        $leftovers = [];
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($this->temporaryDirectory, FilesystemIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            if ($file->isFile() && in_array($file->getExtension(), ['tmp', 'bak', 'old'], true)) {
+                $leftovers[] = $file->getPathname();
+            }
+        }
+        sort($leftovers, SORT_STRING);
+        return $leftovers;
     }
 }

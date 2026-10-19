@@ -29,6 +29,9 @@ final class CompileTextCatalogCommand extends Command
         }
 
         $output->writeln(sprintf('Compiled %d text catalog entries.', count($result->definition->texts)));
+        foreach ($result->staleCleanupFailures as $path) {
+            $output->writeln('<comment>Warning: unable to remove stale text catalog artifact: ' . OutputFormatter::escape($path) . '</comment>');
+        }
         return Command::SUCCESS;
     }
 }

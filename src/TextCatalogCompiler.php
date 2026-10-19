@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Lsr\TextCatalog;
 
+use DirectoryIterator;
 use Gettext\Generator\MoGenerator;
 use Gettext\Generator\PoGenerator;
 use Gettext\Loader\PoLoader;
@@ -12,6 +13,7 @@ use Gettext\Translations;
 use RuntimeException;
 use stdClass;
 use Throwable;
+use UnexpectedValueException;
 
 final readonly class TextCatalogCompiler
 {
@@ -72,19 +74,45 @@ final readonly class TextCatalogCompiler
 
         $generation = null;
         $manifestFile = null;
+        $textsDirectory = null;
+        $generatedTexts = [];
         if ($this->config->frontendDirectory !== null) {
             $directory = rtrim($this->config->frontendDirectory, '/\\') . '/';
-            [$runtime, $compiled] = $this->compileFrontend($definition, $translations);
-            $this->addOutput($files, $directory . 'catalog.ts', $runtime);
-            $this->addOutput($files, $directory . 'catalog.compiled.ts', $compiled);
+            $textsDirectory = $directory . 'texts';
+            $frontend = $this->compileFrontend($definition, $translations);
+            $groupArtifacts = [];
+            $textPaths = [];
+            foreach ($frontend['groups'] as $group => $modules) {
+                $sourcePath = 'texts/' . $group . '.ts';
+                $textPaths[$sourcePath] = $modules['source'];
+                $translationArtifacts = [];
+                foreach ($modules['translations'] as $locale => $contents) {
+                    $translationPath = 'texts/' . $group . '.' . $locale . '.ts';
+                    $textPaths[$translationPath] = $contents;
+                    $translationArtifacts[$locale] = ['path' => $translationPath, 'sha256' => hash('sha256', $contents)];
+                }
+                $groupArtifacts[$group] = [
+                    'source' => ['path' => $sourcePath, 'sha256' => hash('sha256', $modules['source'])],
+                    'translations' => (object) $translationArtifacts,
+                ];
+            }
+            // Consumers run on case-insensitive filesystems, so such paths would overwrite one another.
+            $this->assertNoCaseCollisions(array_map(strval(...), array_keys($textPaths)));
+            foreach ($textPaths as $path => $contents) {
+                $this->addOutput($files, $directory . $path, $contents);
+                $generatedTexts[] = $directory . $path;
+            }
+            $this->addOutput($files, $directory . 'catalog.ts', $frontend['runtime']);
+            $this->addOutput($files, $directory . 'catalog.compiled.ts', $frontend['compiled']);
             $manifest = [
-                'formatVersion' => 1,
+                'formatVersion' => 2,
                 'sourceLocale' => $this->config->sourceLocale,
                 'locales' => $this->config->locales,
                 'domain' => $this->config->domain,
                 'artifacts' => [
-                    'runtime' => ['path' => 'catalog.ts', 'sha256' => hash('sha256', $runtime)],
-                    'compiled' => ['path' => 'catalog.compiled.ts', 'sha256' => hash('sha256', $compiled)],
+                    'runtime' => ['path' => 'catalog.ts', 'sha256' => hash('sha256', $frontend['runtime'])],
+                    'compiled' => ['path' => 'catalog.compiled.ts', 'sha256' => hash('sha256', $frontend['compiled'])],
+                    'groups' => (object) $groupArtifacts,
                 ],
                 'texts' => (object) $definition->texts,
                 'htmlKeys' => (object) $definition->htmlKeys,
@@ -97,8 +125,14 @@ final readonly class TextCatalogCompiler
             $this->addOutput($files, $manifestFile, $this->json($manifest) . "\n");
         }
         $this->publish($files);
+        $cleanupFailures = [];
+        if ($textsDirectory !== null && is_dir($textsDirectory)) {
+            // Only after the manifest was published: drop modules of groups/locales that no longer exist.
+            // Best effort: the new generation is already live, so a failed deletion must not fail compilation.
+            $cleanupFailures = $this->removeStaleTexts($textsDirectory, $generatedTexts);
+        }
 
-        return new CompilationResult($definition, $generation, $manifestFile);
+        return new CompilationResult($definition, $generation, $manifestFile, $cleanupFailures);
     }
 
     private function compilePot(TextCatalogDefinition $definition): Translations {
@@ -129,10 +163,21 @@ final readonly class TextCatalogCompiler
         return $template;
     }
 
+    /**
+     * gettext's language table only knows plain `ll_CC` identifiers, while configured locales may carry a charset or
+     * modifier (`sr@latin`, `de_DE.UTF-8`): plural rules come from the base language, the header keeps the full locale.
+     */
+    private function createLocaleTranslations(string $locale): Translations {
+        $base = preg_replace('/[.@].*$/D', '', $locale) ?? $locale;
+        $translations = Translations::create($this->config->domain, $base);
+        $translations->getHeaders()->setLanguage($locale);
+        return $translations;
+    }
+
     private function updateLocale(Translations $template, string $locale, bool $sourceLocale): Translations {
         $path = $this->poPath($locale);
-        $existing = is_file($path) ? (new PoLoader())->loadFile($path) : Translations::create($this->config->domain, $locale);
-        $updated = Translations::create($this->config->domain, $locale);
+        $existing = is_file($path) ? (new PoLoader())->loadFile($path) : $this->createLocaleTranslations($locale);
+        $updated = $this->createLocaleTranslations($locale);
         foreach ($existing->getHeaders() as $name => $value) {
             $updated->getHeaders()->set((string) $name, (string) $value);
         }
@@ -260,12 +305,33 @@ final readonly class TextCatalogCompiler
 
     /**
      * @param array<non-empty-string, Translations> $translations
-     * @return array{string, string} Runtime and compiled TypeScript bytes.
+     * @return array{
+     *     runtime: string,
+     *     compiled: string,
+     *     groups: array<string, array{source: string, translations: array<string, string>}>
+     * } Runtime and compiled TypeScript bytes plus per-group source and per-locale translation modules.
      */
     private function compileFrontend(TextCatalogDefinition $definition, array $translations): array {
-        $frontendTranslations = [];
+        /** @var array<string, array<string, string>> $groupTexts */
+        $groupTexts = [];
+        foreach ($definition->texts as $key => $text) {
+            $key = (string) $key;
+            $group = $this->group($key);
+            // Keys are stored relative to their group; a root leaf (key equal to its group) becomes "".
+            $groupTexts[$group][$key === $group ? '' : substr($key, strlen($group) + 1)] = $text;
+        }
+        ksort($groupTexts, SORT_STRING);
+
+        // The source locale ships no translations: the gettext msgid already is the source text.
+        /** @var array<string, array<string, array<string, array<string, string|list<string>>>>> $groupMessages */
+        $groupMessages = [];
         foreach ($translations as $locale => $localeTranslations) {
-            $messages = [];
+            if ($locale === $this->config->sourceLocale) {
+                continue;
+            }
+            foreach (array_keys($groupTexts) as $group) {
+                $groupMessages[$group][$locale] = [];
+            }
             foreach ($localeTranslations as $translation) {
                 if ( ! $translation instanceof Translation) {
                     throw new RuntimeException('Text catalog contains an invalid translation.');
@@ -280,52 +346,141 @@ final readonly class TextCatalogCompiler
                 $translated = $translation->getPlural() === null
                     ? ($translation->getTranslation() ?? '')
                     : array_merge([$translation->getTranslation() ?? ''], $translation->getPluralTranslations($this->pluralCount($localeTranslations) - 1));
-                $messages[$translation->getOriginal()][$context] = $translated;
+                $groupMessages[$this->group($context)][$locale][$translation->getOriginal()][$context] = $translated;
             }
-            ksort($messages, SORT_STRING);
-            $frontendTranslations[$locale] = (object) $messages;
         }
+
+        $groups = [];
+        $runtimeGroups = [];
+        $compiledGroups = [];
+        foreach ($groupTexts as $group => $texts) {
+            $source = "import type { CatalogSourceTexts } from 'lsr-text-catalog/types';\n\n"
+                . 'export default ' . $this->typeScriptValue((object) $texts) . " satisfies CatalogSourceTexts;\n";
+            $localeModules = [];
+            $loaders = '';
+            foreach (array_keys($groupMessages[$group] ?? []) as $locale) {
+                $messages = $groupMessages[$group][$locale];
+                ksort($messages, SORT_STRING);
+                $localeModules[$locale] = "import type { CatalogMessages } from 'lsr-text-catalog/types';\n\n"
+                    . 'export default ' . $this->typeScriptValue((object) $messages) . " satisfies CatalogMessages;\n";
+                $loaders .= '            ' . $this->json($locale) . ": () => import('./texts/{$group}.{$locale}.js'),\n";
+            }
+            $translationsBlock = $loaders === ''
+                ? "        translations: {},\n"
+                : "        translations: {\n{$loaders}        },\n";
+            $groupKey = $this->json($group);
+            $runtimeGroups[] = "    {$groupKey}: {\n        source: () => import('./texts/{$group}.js'),\n{$translationsBlock}    },\n";
+            $compiledGroups[] = "    {$groupKey}: {\n{$translationsBlock}    },\n";
+            $groups[$group] = ['source' => $source, 'translations' => $localeModules];
+        }
+
         $textKeyType = implode(' | ', array_map($this->json(...), array_keys($definition->texts))) ?: 'never';
         $htmlTextKeyType = implode(' | ', array_map($this->json(...), array_keys($definition->htmlKeys))) ?: 'never';
-        $translationsJson = $this->typeScriptValue((object) $frontendTranslations);
+        $textGroupType = implode(' | ', array_map($this->json(...), array_keys($groupTexts))) ?: 'never';
+        $htmlKeysJson = $this->json(array_keys($definition->htmlKeys));
         $sourceLocaleJson = $this->json($this->config->sourceLocale);
         $localesJson = $this->json($this->config->locales);
+        $runtimeCatalogGroups = $runtimeGroups === [] ? '{}' : "{\n" . implode('', $runtimeGroups) . '}';
+        $compiledCatalogGroups = $compiledGroups === [] ? '{}' : "{\n" . implode('', $compiledGroups) . '}';
+
         $compiled = <<<TYPESCRIPT
-import type { Translations } from 'lsr-text-catalog/types';
+import type { CompiledCatalogGroups } from 'lsr-text-catalog/types';
 
 export type TextKey = {$textKeyType};
 export type HtmlTextKey = {$htmlTextKeyType};
+export type TextGroup = {$textGroupType};
 export const sourceLocale = {$sourceLocaleJson} as const;
 export const locales = {$localesJson} as const;
-export const catalogTranslations = {$translationsJson} satisfies Translations;
+export const catalogGroups = {$compiledCatalogGroups} satisfies CompiledCatalogGroups<TextGroup>;
 
 // Authoring declaration: value uses must be expanded by the textCatalog Vite plugin.
 export declare function text(key: TextKey): string;
 
 TYPESCRIPT;
 
-        $catalogJson = $this->typeScriptValue((object) $definition->texts);
-        $htmlKeysJson = $this->json(array_keys($definition->htmlKeys));
         $runtime = <<<TYPESCRIPT
-import type { Translations } from 'lsr-text-catalog/types';
+import type { RuntimeCatalogGroups } from 'lsr-text-catalog/types';
 
-export const catalog = {$catalogJson} as const;
-export type TextKey = keyof typeof catalog;
+export type TextKey = {$textKeyType};
 export type HtmlTextKey = {$htmlTextKeyType};
+export type TextGroup = {$textGroupType};
 export const htmlTextKeys = {$htmlKeysJson} as readonly TextKey[];
 export const sourceLocale = {$sourceLocaleJson} as const;
 export const locales = {$localesJson} as const;
-export const catalogTranslations = {$translationsJson} satisfies Translations;
-
-export function text(key: TextKey): string {
-    if (!Object.prototype.hasOwnProperty.call(catalog, key)) {
-        throw new Error(`Unknown text catalog key "\${key}".`);
-    }
-    return catalog[key];
-}
+export const catalogGroups = {$runtimeCatalogGroups} satisfies RuntimeCatalogGroups<TextGroup>;
 
 TYPESCRIPT;
-        return [$runtime, $compiled];
+        return ['runtime' => $runtime, 'compiled' => $compiled, 'groups' => $groups];
+    }
+
+    /** @return non-empty-string The root catalog key (first dotted segment) a key or gettext context belongs to. */
+    private function group(string $key): string {
+        $dot = strpos($key, '.');
+        $group = $dot === false ? $key : substr($key, 0, $dot);
+        if ($group === '') {
+            throw new RuntimeException('Text catalog key has no group: "' . $key . '".');
+        }
+        return $group;
+    }
+
+    /** @param list<string> $paths */
+    private function assertNoCaseCollisions(array $paths): void {
+        $seen = [];
+        foreach ($paths as $path) {
+            $folded = strtolower($path);
+            if (isset($seen[$folded])) {
+                throw new RuntimeException('Text catalog artifact paths must not differ only by letter case: ' . $seen[$folded] . ', ' . $path);
+            }
+            $seen[$folded] = $path;
+        }
+    }
+
+    /**
+     * Deletes stale `texts/*.ts` files of previous generations. Never touches a file that is the new generation's
+     * file under a different letter case (case-insensitive filesystems alias such names).
+     *
+     * @param list<string> $generated Absolute paths of the new generation's `texts/*.ts` files.
+     * @return list<string> Paths that could not be removed.
+     */
+    private function removeStaleTexts(string $textsDirectory, array $generated): array {
+        $generatedNames = [];
+        $generatedByFolded = [];
+        foreach ($generated as $path) {
+            $name = basename($path);
+            $generatedNames[$name] = true;
+            $generatedByFolded[strtolower($name)] = $name;
+        }
+        $failed = [];
+        try {
+            $present = [];
+            $candidates = [];
+            foreach (new DirectoryIterator($textsDirectory) as $entry) {
+                if ($entry->isDot()) {
+                    continue;
+                }
+                $present[$entry->getFilename()] = true;
+                if ( ! $entry->isLink() && $entry->isFile() && $entry->getExtension() === 'ts') {
+                    $candidates[] = $entry->getFilename();
+                }
+            }
+        } catch (UnexpectedValueException) {
+            return [$textsDirectory];
+        }
+        foreach ($candidates as $name) {
+            if (isset($generatedNames[$name])) {
+                continue;
+            }
+            $folded = strtolower($name);
+            // Same folded name as a new file and no separate exact-name entry: this entry is that file.
+            if (isset($generatedByFolded[$folded]) && ! isset($present[$generatedByFolded[$folded]])) {
+                continue;
+            }
+            $path = $textsDirectory . '/' . $name;
+            if ( ! @unlink($path)) {
+                $failed[] = $path;
+            }
+        }
+        return $failed;
     }
 
     /** @return list<string> */
@@ -402,12 +557,25 @@ TYPESCRIPT;
         $files[$path] = $contents;
     }
 
-    /** @param array<string, string> $files */
+    /**
+     * Atomically (per file) replaces the outputs, rolling everything back on failure. Files whose bytes already match
+     * are left untouched. A file whose existing directory entry differs from the target name only by letter case
+     * (case-insensitive filesystems keep the old entry name on `rename()`) is replaced by moving the old entry aside,
+     * so the published file carries the exact new name.
+     *
+     * @param array<string, string> $files
+     */
     private function publish(array $files): void {
         /** @var array<string, string> $staged */
         $staged = [];
         /** @var array<string, string> $backups */
         $backups = [];
+        /** @var array<string, string> $caseRenames Target path => path of the differently-cased existing entry. */
+        $caseRenames = [];
+        /** @var array<string, array{aside: string, original: string}> $asides */
+        $asides = [];
+        /** @var array<string, list<string>> $listings */
+        $listings = [];
         $published = [];
         $resolvedPaths = [];
         try {
@@ -421,16 +589,26 @@ TYPESCRIPT;
                 if (is_link($path) || (file_exists($path) && ! is_file($path))) {
                     throw new RuntimeException('Text catalog output must be a regular file: ' . $path);
                 }
+                $exists = is_file($path);
+                $existingName = $exists ? $this->existingEntryName($path, $listings) : basename($path);
+                if ($exists && $existingName === basename($path) && $this->hasContents($path, $contents)) {
+                    continue;
+                }
                 $temporary = $path . '.' . bin2hex(random_bytes(8)) . '.tmp';
                 $staged[$path] = $temporary;
                 if (file_put_contents($temporary, $contents, LOCK_EX) !== strlen($contents)) {
                     throw new RuntimeException('Unable to stage text catalog artifact: ' . $path);
                 }
-                if (is_file($path)) {
-                    $backup = $path . '.' . bin2hex(random_bytes(8)) . '.bak';
-                    $backups[$path] = $backup;
-                    if ( ! copy($path, $backup)) {
-                        throw new RuntimeException('Unable to back up text catalog artifact: ' . $path);
+                if ($exists) {
+                    if ($existingName === basename($path)) {
+                        $backup = $path . '.' . bin2hex(random_bytes(8)) . '.bak';
+                        $backups[$path] = $backup;
+                        if ( ! copy($path, $backup)) {
+                            throw new RuntimeException('Unable to back up text catalog artifact: ' . $path);
+                        }
+                    } else {
+                        // The old entry itself becomes the backup when it is moved aside during publication.
+                        $caseRenames[$path] = dirname($path) . '/' . $existingName;
                     }
                     $permissions = fileperms($path);
                     if ($permissions !== false && ! chmod($temporary, $permissions & 0777)) {
@@ -439,6 +617,19 @@ TYPESCRIPT;
                 }
             }
             foreach ($staged as $path => $temporary) {
+                if (isset($caseRenames[$path])) {
+                    $aside = $path . '.' . bin2hex(random_bytes(8)) . '.old';
+                    if ( ! rename($caseRenames[$path], $aside)) {
+                        throw new RuntimeException('Unable to move aside text catalog artifact: ' . $caseRenames[$path]);
+                    }
+                    $asides[$path] = ['aside' => $aside, 'original' => $caseRenames[$path]];
+                    // Registered before the final rename so that rollback also restores the moved-aside entry.
+                    $published[] = $path;
+                    if ( ! rename($temporary, $path)) {
+                        throw new RuntimeException('Unable to replace text catalog artifact: ' . $path);
+                    }
+                    continue;
+                }
                 if ( ! rename($temporary, $path)) {
                     throw new RuntimeException('Unable to replace text catalog artifact: ' . $path);
                 }
@@ -447,11 +638,19 @@ TYPESCRIPT;
         } catch (Throwable $exception) {
             $rollbackFailures = [];
             foreach (array_reverse($published) as $path) {
-                $restored = isset($backups[$path]) ? rename($backups[$path], $path) : unlink($path);
+                if (isset($asides[$path])) {
+                    $restored = ( ! file_exists($path) || unlink($path)) && rename($asides[$path]['aside'], $asides[$path]['original']);
+                    // Either restored, or retained for manual recovery if the filesystem refuses rollback.
+                    unset($asides[$path]);
+                } else {
+                    $restored = isset($backups[$path]) ? rename($backups[$path], $path) : unlink($path);
+                    if ( ! $restored) {
+                        // Retain the backup for manual recovery if the filesystem refuses rollback.
+                        unset($backups[$path]);
+                    }
+                }
                 if ( ! $restored) {
                     $rollbackFailures[] = $path;
-                    // Retain the backup for manual recovery if the filesystem refuses rollback.
-                    unset($backups[$path]);
                 }
             }
             if ($rollbackFailures !== []) {
@@ -459,12 +658,43 @@ TYPESCRIPT;
             }
             throw $exception;
         } finally {
-            foreach (array_merge(array_values($staged), array_values($backups)) as $temporary) {
+            $leftovers = array_merge(
+                array_values($staged),
+                array_values($backups),
+                array_map(static fn (array $moved): string => $moved['aside'], array_values($asides)),
+            );
+            foreach ($leftovers as $temporary) {
                 if (is_file($temporary)) {
                     unlink($temporary);
                 }
             }
         }
+    }
+
+    /**
+     * @param array<string, list<string>> $listings Directory entry names, memoized per directory.
+     * @return string The directory entry `$path` resolves to; differs from its basename only by letter case on case-insensitive filesystems.
+     */
+    private function existingEntryName(string $path, array &$listings): string {
+        $directory = dirname($path);
+        $listings[$directory] ??= array_values(array_filter(
+            scandir($directory) ?: [],
+            static fn (string $name): bool => $name !== '.' && $name !== '..',
+        ));
+        $name = basename($path);
+        if (in_array($name, $listings[$directory], true)) {
+            return $name;
+        }
+        foreach ($listings[$directory] as $entry) {
+            if (strcasecmp($entry, $name) === 0) {
+                return $entry;
+            }
+        }
+        return $name;
+    }
+
+    private function hasContents(string $path, string $contents): bool {
+        return filesize($path) === strlen($contents) && file_get_contents($path) === $contents;
     }
 
     private function ensureDirectory(string $directory): void {
