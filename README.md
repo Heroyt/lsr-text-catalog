@@ -14,6 +14,8 @@ composer require lsr/text-catalog
 
 The standard Packagist installation needs no custom Composer repository. To use the optional Vue/Vite integration, install the independently versioned [`lsr-text-catalog`](https://www.npmjs.com/package/lsr-text-catalog) npm package as well.
 
+**Upgrading to 0.3:** frontend artifacts move to format 2 (per-group/per-locale lazy modules), readable only by `lsr-text-catalog` npm `0.2`. Upgrade both packages together and regenerate; PHP-only consumers are unaffected. Application steps are in the npm package's [upgrade guide](https://github.com/Heroyt/lsr-text-catalog-js#upgrading-from-01-artifact-format-1).
+
 ## Requirements
 
 - PHP `>=8.5`, `ext-dom`, `ext-libxml`, `nette/neon ^3.4`, and `gettext/gettext ^5.7`.
@@ -68,7 +70,7 @@ Keys combine the relative directory/file namespace with nested NEON keys. Direct
 
 `TextCatalogDefinition` exposes `texts`, `htmlKeys`, `plurals`, and `sourceFiles`. `TextCatalog` exposes source lookup and HTML membership; it never translates, interpolates, checks freshness, or compiles during lookup. It memoizes the selected definition. Compiled PHP caches are trusted executable build output. Compile during deployment, and restart/reset application-owned service lifetimes as needed when replacing a catalog.
 
-`CompilationResult` contains the definition and, when frontend generation is enabled, the generation digest and manifest path. Compilation maintains POT/PO catalogs and emits MO, PHP cache, and optional frontend artifacts. Translation contexts are semantic keys; plural contexts are the parent key. Existing translator content is merged rather than replaced with empty translations. Every configured locale must have complete, non-fuzzy active translations, including all required plural forms, and each translation must preserve the source placeholder set. The source locale is populated from canonical NEON copy.
+`CompilationResult` contains the definition and, when frontend generation is enabled, the generation digest and manifest path, plus `staleCleanupFailures` (a list of stale `texts/*.ts` paths that could not be removed; empty by default). Compilation maintains POT/PO catalogs and emits MO, PHP cache, and optional frontend artifacts. Translation contexts are semantic keys; plural contexts are the parent key. Existing translator content is merged rather than replaced with empty translations. Every configured locale must have complete, non-fuzzy active translations, including all required plural forms, and each translation must preserve the source placeholder set. The source locale is populated from canonical NEON copy.
 
 Bootstrap with only the source locale to generate the POT, then prepare complete translator-owned target PO files before adding their locales to `locales`. Missing or fuzzy translations, missing plural forms and placeholder mismatches fail compilation before any outputs are published; a failed compile does not publish a starter target PO.
 
@@ -76,15 +78,21 @@ All content is validated and rendered before publication. Outputs are staged, th
 
 ## Frontend artifact contract
 
-With `frontendDirectory` enabled, compilation emits:
+With `frontendDirectory` enabled, compilation emits artifact **format 2**. Texts and translations are split per *group* (the root catalog key, i.e. the part of a key before its first `.`; a key without a dot is its own group) and per locale, so applications load only what they render:
 
-- `catalog.ts`: source lookup map, `TextKey`, `HtmlTextKey`, HTML membership, locale configuration and contextual translations.
-- `catalog.compiled.ts`: authoring key types, a declaration-only `text` macro, locale configuration and translations, without a runtime source lookup map.
-- `catalog.build.json`: format version **1**, configuration identity, source/HTML/plural snapshot, SHA-256 artifact digests and a deterministic generation digest.
+- `catalog.ts`: `TextKey`, `HtmlTextKey`, `TextGroup`, HTML membership, locale configuration and `catalogGroups`, a map of lazy `import()` loaders for each group's source texts and per-locale translations.
+- `catalog.compiled.ts`: the same types, locale configuration and `catalogGroups` without source loaders, plus a declaration-only `text` macro.
+- `texts/<group>.ts`: runtime source texts of one group. Keys are stored **relative to the group**: key `game.count.one` in group `game` is stored as `count.one`, and a root leaf whose key equals its group (key `title` in group `title`) is stored under the empty string `""`. Consumers re-add the group prefix (`<group>.<key>`, or just `<group>` for `""`) to recover the semantic key.
+- `texts/<group>.<locale>.ts`: contextual translations of one group for one **non-source** locale. The source locale ships no translation modules because the gettext msgid already is the source text.
+- `catalog.build.json`: format version **2**, configuration identity, source/HTML/plural snapshot, SHA-256 digests of every artifact (including each group module under `artifacts.groups`) and a deterministic generation digest. It is published last as the commit marker.
+
+Generated modules load `texts/*` through dynamic `import()` (written with `.js` specifiers that TypeScript and Vite resolve to the generated `.ts` files), so bundlers emit them as separate lazy chunks. Groups are camelCase and never contain `.`, so `<group>.ts` and `<group>.<locale>.ts` cannot collide. Locale identifiers may contain `.` and `@` (for example `sr@latin`, `de_DE.UTF-8`); they are used verbatim in file names, loader specifiers and manifest entries. Compilation fails without publishing anything when two generated `texts/` paths differ only by letter case (for example groups `fooBar` and `foobar`, or locales `cs_CZ` and `cs_cz`), because consumers may run on case-insensitive filesystems.
+
+Publication skips every output whose existing bytes are identical (its mtime and inode stay untouched), so recompiling an unchanged catalog, or changing one group, only rewrites the affected files plus the manifest and catalog modules as needed. When a previously published file differs from the new name only by letter case (for example after renaming group `fooBar` to `foobar`), the old entry is replaced so the file carries the exact new name even on case-insensitive filesystems. After a successful publish, stale `texts/*.ts` files from removed groups or locales are deleted on a best-effort basis: only regular `.ts` files directly inside `texts/` are touched, a file that is the new generation's file under another letter case is never deleted, and a failing deletion does not fail compilation. Paths that could not be removed are returned in `CompilationResult::$staleCleanupFailures`, and `texts:cache:compile` prints a warning line per path while still exiting successfully.
 
 Generated types import `lsr-text-catalog/types`; generated files belong to the consumer. They are ordinary TypeScript files visible to `tsc`/`vue-tsc` before Vite runs. Declaration-only compiled macros require the compiled Vite transform; they are not callable JavaScript fallbacks. Regenerate frontend artifacts when upgrading the compiler or npm package rather than hand-editing generated import paths.
 
-Generation hashing uses recursively key-sorted JSON with compact separators and unescaped Unicode, slashes and line terminators, excluding `generation` itself. Artifact digests cover exact bytes. The npm reader accepts format 1 and rejects missing/unknown versions, mismatched configuration, malformed references, tampering and mixed generations. Package versions remain independent of the artifact format.
+Generation hashing uses recursively key-sorted JSON with compact separators and unescaped Unicode, slashes and line terminators, excluding `generation` itself. Artifact digests cover exact bytes. The npm reader accepts format 2 and rejects missing/unknown versions (including the former format 1), mismatched configuration, malformed references, tampering and mixed generations. Package versions remain independent of the artifact format.
 
 ## Optional DI and console integration
 
